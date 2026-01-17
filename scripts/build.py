@@ -116,15 +116,34 @@ def import_sendai_events(con):
 
 # ===== HTML =====
 def html(title, body):
+    css = """
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
+         background:#f7f7f7;margin:0;color:#333}
+    header{background:#4CAF50;color:#fff;padding:16px}
+    header h1{margin:0;font-size:22px}
+    .container{max-width:900px;margin:0 auto;padding:16px}
+    nav{margin:12px 0}
+    nav a{margin-right:12px;text-decoration:none;color:#2e7d32;font-weight:600}
+    .card{background:#fff;border-radius:10px;padding:14px;margin:12px 0;
+          box-shadow:0 2px 6px rgba(0,0,0,.06)}
+    .card h3{margin:0 0 6px;font-size:18px}
+    .meta{font-size:13px;color:#666;margin-bottom:8px}
+    footer{text-align:center;font-size:12px;color:#888;padding:16px}
+    """
     return f"""<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)}</title>
+<style>{css}</style>
 </head>
 <body>
-<h1>{escape(title)}</h1>
+<header><h1>{escape(title)}</h1></header>
+<div class="container">
 {body}
+</div>
+<footer>© miyagi-kids</footer>
 </body>
 </html>
 """
@@ -141,6 +160,9 @@ def _is_weekend(start_at: str) -> bool:
         return False
 
 def build_site(con):
+    CSS = """<ここにCSS全文>"""
+    (SITE_DIR / "style.css").write_text(CSS, encoding="utf-8")
+
     SITE_DIR.mkdir(exist_ok=True)
 
     rows = con.execute(
@@ -150,20 +172,19 @@ def build_site(con):
     today = datetime.now().strftime("%Y-%m-%d")
 
     events = []
+    body = ""
+
     for t, s, start_at, venue in rows:
-        if not start_at:
-            continue
-        if start_at < today:
-            continue
-        events.append((t, s, start_at, venue))
+        if not start_at or start_at < today:
+           continue
 
-    events.sort(key=lambda x: x[2])
-
-    body = "<h2>これからのイベント</h2>"
-    for t, s, d, v in events[:100]:
-        body += f"<h3>{escape(t)}</h3>"
-        body += f"<p>{escape(d)} / {escape(v)}</p>"
-        body += f"<p>{escape(s or '')}</p>"
+        body += f"""
+    <div class="card">
+      <h3>{escape(t)}</h3>
+      <div class="meta">{escape(start_at or "")} / {escape(venue or "")}</div>
+      <div>{escape((s or "")[:240])}</div>
+    </div>
+    """
 
     (SITE_DIR / "index.html").write_text(
         html("宮城の子どもイベント（最新）", body),
