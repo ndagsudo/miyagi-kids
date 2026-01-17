@@ -2,7 +2,7 @@ import sqlite3
 import csv
 import urllib.request
 import json
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from html import escape
 
@@ -176,20 +176,28 @@ def build_site(con):
         "SELECT title, summary, start_at, venue_name FROM events"
     ).fetchall()
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = date.today().isoformat()
 
     events = []
     body = ""
+
+    from datetime import datetime
+    updated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    body += f"<p class='meta'>更新: {updated}</p>"
 
     for t, s, start_at, venue in rows:
         if not start_at or start_at < today:
            continue
 
+    desc = (s or "").replace("\n", " ").replace("\r", " ").strip()
+    if len(desc) > 140:
+        desc = desc[:140] + "…"
+
         body += f"""
     <div class="card">
       <h3>{escape(t)}</h3>
       <div class="meta">{escape(start_at or "")} / {escape(venue or "")}</div>
-      <div>{escape((s or "")[:240])}</div>
+      <div>{escape(desc)}</div>
     </div>
     """
 
