@@ -160,6 +160,8 @@ def _is_weekend(start_at: str) -> bool:
         return False
 
 def build_site(con):
+    SITE_DIR.mkdir(parents=True, exist_ok=True)
+
     CSS = """<ここにCSS全文>"""
     (SITE_DIR / "style.css").write_text(CSS, encoding="utf-8")
 
