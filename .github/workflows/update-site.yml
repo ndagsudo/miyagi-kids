@@ -25,7 +25,7 @@ jobs:
 
       - name: Sync site output to root
         run: |
-          rsync -av --delete site/ ./
+          rsync -av --delete site/ ./ || [ $? -eq 24 ]
           rm -rf site
 
       - name: Commit and push if changed
