@@ -3,27 +3,23 @@ name: Update site
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 22 * * *"   # 毎朝7時（JST=UTC+9）
+    - cron: "0 22 * * *" # JST 朝7時
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
-          fetch-depth: 0
-
-      - name: Debug (must see .git)
-        run: |
-          pwd
-          ls -la
-          ls -la .git
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,15 +29,19 @@ jobs:
       - name: Run build
         run: python scripts/build.py
 
-      - name: Sync site output to root
-        run: |
-          rsync -av --delete site/ ./ || [ $? -eq 24 ]
-          rm -rf site
+      # build.py は site/ に index.html を出す前提
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
 
-      - name: Commit and push if changed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet || git commit -m "Auto update site"
-          git push
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
