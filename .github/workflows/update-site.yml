@@ -12,11 +12,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           persist-credentials: true
           fetch-depth: 0
+      - name: Show where we are (debug)
+        run: |
+          pwd
+          ls -la
+          test -d .git && echo ".git OK" || (echo ".git NOT FOUND" && exit 1)
 
       - name: Set up Python
         uses: actions/setup-python@v5
