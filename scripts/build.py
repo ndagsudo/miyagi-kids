@@ -115,31 +115,21 @@ def import_sendai_events(con):
     print(f"Imported sendai events: {count}")
 
 # ===== HTML =====
+from datetime import datetime
+
 def html(title, body):
-    css = """
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
-         background:#f7f7f7;margin:0;color:#333}
-    header{background:#4CAF50;color:#fff;padding:16px}
-    header h1{margin:0;font-size:22px}
-    .container{max-width:900px;margin:0 auto;padding:16px}
-    nav{margin:12px 0}
-    nav a{margin-right:12px;text-decoration:none;color:#2e7d32;font-weight:600}
-    .card{background:#fff;border-radius:10px;padding:14px;margin:12px 0;
-          box-shadow:0 2px 6px rgba(0,0,0,.06)}
-    .card h3{margin:0 0 6px;font-size:18px}
-    .meta{font-size:13px;color:#666;margin-bottom:8px}
-    footer{text-align:center;font-size:12px;color:#888;padding:16px}
-    """
+    v = datetime.now().strftime("%Y%m%d%H%M")  # 毎回変わる
+
     return f"""<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)}</title>
-<style>{css}</style>
+<link rel="stylesheet" href="style.css?v={v}">
 </head>
 <body>
-<header><h1>{escape(title)}</h1></header>
+<header><h1>宮城の子どもイベント</h1></header>
 <div class="container">
 {body}
 </div>
@@ -160,9 +150,24 @@ def _is_weekend(start_at: str) -> bool:
         return False
 
 def build_site(con):
-    SITE_DIR.mkdir(parents=True, exist_ok=True)
+    CSS = """
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
+         background:#f7f7f7;margin:0;color:#333}
+    header{background:#4CAF50;color:#fff;padding:16px}
+    header h1{margin:0;font-size:22px}
+    .container{max-width:900px;margin:0 auto;padding:16px}
+    nav{margin:12px 0}
+    nav a{margin-right:12px;text-decoration:none;color:#2e7d32;font-weight:600}
+    .card{background:#fff;border-radius:10px;padding:14px;margin:12px 0;
+          box-shadow:0 2px 6px rgba(0,0,0,.06)}
+    .card h3{margin:0 0 6px;font-size:18px}
+    .meta{font-size:13px;color:#666;margin-bottom:8px}
+    .badge{display:inline-block;padding:2px 8px;margin-right:6px;border-radius:12px;font-size:12px;background:#e0e0e0}
+    .badge.free{background:#ffeb3b}
+    footer{text-align:center;font-size:12px;color:#888;padding:16px}
+    """
 
-    CSS = """<ここにCSS全文>"""
+    SITE_DIR.mkdir(parents=True, exist_ok=True)
     (SITE_DIR / "style.css").write_text(CSS, encoding="utf-8")
 
     SITE_DIR.mkdir(exist_ok=True)
