@@ -3,10 +3,16 @@ name: Update site
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *"   # 毎日 00:00 UTC（日本時間9時）
+    - cron: "0 0 * * *"  # 毎日 00:00 UTC（日本時間 09:00）
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -24,10 +30,19 @@ jobs:
         run: |
           python scripts/build.py
 
-      - name: Commit and push site
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add site
-          git commit -m "Update site" || echo "No changes"
-          git push
+      # site/ を Pages の成果物としてアップロード
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
