@@ -154,6 +154,11 @@ def _is_weekend(start_at: str) -> bool:
         return False
 
 def build_site(con):
+import os
+    print("RUNNING:", __file__)
+    print("CWD:", os.getcwd())
+    print("EVENTS COLS:", [r[1] for r in con.execute("PRAGMA table_info(events)").fetchall()])
+  
     SITE_DIR.mkdir(parents=True, exist_ok=True)
 
     today = dt.date.today().isoformat()
