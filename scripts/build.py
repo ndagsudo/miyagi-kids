@@ -9,6 +9,69 @@ from html import escape
 
 print("RUNNING:", __file__)
 
+# ===== CSS定義 =====
+CSS = """
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+               "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+  background: #f3f4f6;
+  margin: 0;
+  color: #333;
+}
+
+header {
+  background: #4caf50;
+  color: white;
+  padding: 16px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.card {
+  background: white;
+  border-radius: 10px;
+  padding: 14px;
+  margin: 12px 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+.card h3 {
+  margin: 0 0 6px 0;
+  font-size: 18px;
+}
+
+.meta {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.card a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.card a:hover {
+  text-decoration: underline;
+}
+
+footer {
+  text-align: center;
+  font-size: 12px;
+  color: #888;
+  padding: 16px;
+}
+"""
+
 # ===== 設定 =====
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
@@ -155,6 +218,7 @@ def _is_weekend(start_at: str) -> bool:
 
 def build_site(con):
     SITE_DIR.mkdir(parents=True, exist_ok=True)
+    (SITE_DIR / "style.css").write_text(CSS, encoding="utf-8")
 
     today = dt.date.today().isoformat()
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
