@@ -2,9 +2,12 @@ import sqlite3
 import csv
 import urllib.request
 import json
+import datetime as dt
 from datetime import datetime, date
 from pathlib import Path
 from html import escape
+
+print("RUNNING:", __file__)
 
 # ===== 設定 =====
 ROOT = Path(__file__).resolve().parents[1]
@@ -150,6 +153,9 @@ def _is_weekend(start_at: str) -> bool:
         return False
 
 def build_site(con):
+
+    print("ENTER build_site")
+
     CSS = """
     body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
          background:#f7f7f7;margin:0;color:#333}
@@ -176,45 +182,71 @@ def build_site(con):
         "SELECT title, summary, start_at, venue_name FROM events"
     ).fetchall()
 
-    today = date.today().isoformat()
-
     events = []
     body = ""
 
-    from datetime import datetime
-    updated = datetime.now().strftime("%Y-%m-%d %H:%M")
-    body += f"<p class='meta'>更新: {updated}</p>"
+import datetime as dt
+
+def build_site(con):
+    # site/ を必ず作る
+    SITE_DIR.mkdir(parents=True, exist_ok=True)
+
+    today = dt.date.today().isoformat()
+    updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # DBから取る（あなたの sample に合わせている）
+    rows = con.execute(
+        "SELECT title, summary, start_at, venue_name FROM events"
+    ).fetchall()
+
+    future = []
+    past = []
 
     for t, s, start_at, venue in rows:
-        if not start_at or start_at < today:
-           continue
+        start_day = (start_at or "")[:10]  # 'YYYY-MM-DD'
+        if start_day.count("-") != 2:
+            continue
 
-    desc = (s or "").replace("\n", " ").replace("\r", " ").strip()
-    if len(desc) > 140:
-        desc = desc[:140] + "…"
+        if start_day >= today:
+            future.append((t, s, start_day, venue))
+        else:
+            past.append((t, s, start_day, venue))
+
+    show = future if future else past[-20:]
+
+    body = f"<p class='meta'>更新: {updated}</p>"
+
+    if future:
+        body += "<h2>これからのイベント</h2>"
+    else:
+        body += "<h2>直近のイベント（過去）</h2>"
+
+    # ★ ここが 0 ならカードが出ない。確認用に一時的に残す
+    body += f"<p class='meta'>表示件数: {len(show)}</p>"
+
+    for t, s, start_day, venue in show:
+        desc = (s or "").replace("\n", " ").replace("\r", " ").strip()
+        if len(desc) > 140:
+            desc = desc[:140] + "…"
 
         body += f"""
-    <div class="card">
-      <h3>{escape(t)}</h3>
-      <div class="meta">{escape(start_at or "")} / {escape(venue or "")}</div>
-      <div>{escape(desc)}</div>
-    </div>
-    """
+<div class="card">
+  <h3>{escape(t)}</h3>
+  <div class="meta">{escape(start_day)} / {escape(venue or "")}</div>
+  <div>{escape(desc)}</div>
+</div>
+"""
 
     (SITE_DIR / "index.html").write_text(
-        html("宮城の子どもイベント（最新）", body),
+        html("宮城の子どもイベント", body),
         encoding="utf-8"
     )
 
-    print("OK: site/index.html を生成しました（最新イベントのみ）")
-
-# ===== main =====
 def main():
     con = connect_db()
     import_sendai_events(con)
     build_site(con)
     con.close()
-    print("OK: site/index.html を生成しました")
 
 if __name__ == "__main__":
     main()
