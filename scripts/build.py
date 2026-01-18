@@ -221,9 +221,6 @@ def build_site(con):
     else:
         body += "<h2>直近のイベント（過去）</h2>"
 
-    # ★ ここが 0 ならカードが出ない。確認用に一時的に残す
-    body += f"<p class='meta'>表示件数: {len(show)}</p>"
-
     for t, s, start_day, venue in show:
         desc = (s or "").replace("\n", " ").replace("\r", " ").strip()
         if len(desc) > 140:
