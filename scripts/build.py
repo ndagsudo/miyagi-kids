@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 def connect_db():
+    print("USING DB:", DB_PATH)
     DATA_DIR.mkdir(exist_ok=True)
     con = sqlite3.connect(DB_PATH)
     con.executescript(DDL)
@@ -153,82 +154,61 @@ def _is_weekend(start_at: str) -> bool:
         return False
 
 def build_site(con):
-
-    print("ENTER build_site")
-
-    CSS = """
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
-         background:#f7f7f7;margin:0;color:#333}
-    header{background:#4CAF50;color:#fff;padding:16px}
-    header h1{margin:0;font-size:22px}
-    .container{max-width:900px;margin:0 auto;padding:16px}
-    nav{margin:12px 0}
-    nav a{margin-right:12px;text-decoration:none;color:#2e7d32;font-weight:600}
-    .card{background:#fff;border-radius:10px;padding:14px;margin:12px 0;
-          box-shadow:0 2px 6px rgba(0,0,0,.06)}
-    .card h3{margin:0 0 6px;font-size:18px}
-    .meta{font-size:13px;color:#666;margin-bottom:8px}
-    .badge{display:inline-block;padding:2px 8px;margin-right:6px;border-radius:12px;font-size:12px;background:#e0e0e0}
-    .badge.free{background:#ffeb3b}
-    footer{text-align:center;font-size:12px;color:#888;padding:16px}
-    """
-
-    SITE_DIR.mkdir(parents=True, exist_ok=True)
-    (SITE_DIR / "style.css").write_text(CSS, encoding="utf-8")
-
-    SITE_DIR.mkdir(exist_ok=True)
-
-    rows = con.execute(
-        "SELECT title, summary, start_at, venue_name FROM events"
-    ).fetchall()
-
-    events = []
-    body = ""
-
-import datetime as dt
-
-def build_site(con):
-    # site/ を必ず作る
     SITE_DIR.mkdir(parents=True, exist_ok=True)
 
     today = dt.date.today().isoformat()
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # DBから取る（あなたの sample に合わせている）
-    rows = con.execute(
-        "SELECT title, summary, start_at, venue_name FROM events"
-    ).fetchall()
+    # events列名を取得（URL列を自動検出する）
+    cols = [r[1] for r in con.execute("PRAGMA table_info(events)").fetchall()]
 
-    future = []
-    past = []
+    # URL列候補を優先順位で探す
+    url_candidates = [
+        "detailedUrl", "detailUrl",
+        "detailed_url", "detail_url",
+        "url", "event_url", "link", "source_url"
+    ]
+    url_col = next((c for c in url_candidates if c in cols), None)
 
-    for t, s, start_at, venue in rows:
-        start_day = (start_at or "")[:10]  # 'YYYY-MM-DD'
+    # SELECT文を組み立て（URL列が無ければ空文字を入れる）
+    if url_col:
+        sql = f"SELECT title, summary, start_at, venue_name, {url_col} FROM events"
+    else:
+        sql = "SELECT title, summary, start_at, venue_name, '' as url FROM events"
+
+    rows = con.execute(sql).fetchall()
+
+    future, past = [], []
+
+    for t, s, start_at, venue, url in rows:
+        start_day = (start_at or "")[:10]
         if start_day.count("-") != 2:
             continue
 
+        item = (t, s, start_day, venue, url)
+
         if start_day >= today:
-            future.append((t, s, start_day, venue))
+            future.append(item)
         else:
-            past.append((t, s, start_day, venue))
+            past.append(item)
 
     show = future if future else past[-20:]
 
     body = f"<p class='meta'>更新: {updated}</p>"
+    body += "<h2>これからのイベント</h2>" if future else "<h2>直近のイベント（過去）</h2>"
 
-    if future:
-        body += "<h2>これからのイベント</h2>"
-    else:
-        body += "<h2>直近のイベント（過去）</h2>"
-
-    for t, s, start_day, venue in show:
+    for t, s, start_day, venue, url in show:
         desc = (s or "").replace("\n", " ").replace("\r", " ").strip()
         if len(desc) > 140:
             desc = desc[:140] + "…"
 
+        title_html = escape(t)
+        if url:
+            title_html = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{escape(t)}</a>'
+
         body += f"""
 <div class="card">
-  <h3>{escape(t)}</h3>
+  <h3>{title_html}</h3>
   <div class="meta">{escape(start_day)} / {escape(venue or "")}</div>
   <div>{escape(desc)}</div>
 </div>
