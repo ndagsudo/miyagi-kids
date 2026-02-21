@@ -695,6 +695,7 @@ def build_site(con):
             weekend_body,
             description=f"今週末（{sat_str}〜{sun_str}）の子ども向けイベントまとめ。おすすめ3選・無料件数つき。",
             path="weekend.html",
+        og_image="ogp-g4.png",  # ← ここ追加
         ),
         encoding="utf-8"
     )
