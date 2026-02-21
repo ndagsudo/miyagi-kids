@@ -383,17 +383,14 @@ def generate_weekend_ogp(sat_str: str, sun_str: str, out_path: Path) -> None:
     ]
 
     def load_font(size: int):
-        candidates = [
-            # GitHub Actions (Ubuntu) で入ることが多い
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
-            "/usr/share/fonts/opentype/noto/NotoSansCJKJP-Regular.otf",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSansCJKjp-Regular.otf",
-            # 万一の別名
-            "/usr/share/fonts/opentype/noto/NotoSansJP-Regular.otf",
-            "/usr/share/fonts/truetype/noto/NotoSansJP-Regular.otf",
-        ]
+        fp = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+        try:
+            font = ImageFont.truetype(fp, size=size)
+            print("[OGP] font OK:", fp, "size=", size)
+            return font
+        except Exception as e:
+            print("[OGP] font FAIL:", fp, "size=", size, "err=", repr(e))
+            return ImageFont.load_default()
 
         for fp in candidates:
             try:
@@ -763,13 +760,17 @@ def build_site(con):
 </div>
 """
 
+    og_weekend_name = f"ogp-weekend-{sat_str.replace('-', '')}.png"
+    generate_weekend_ogp(sat_str, sun_str, SITE_DIR / og_weekend_name)
+
+    # weekend.html の書き出しで
     (SITE_DIR / "weekend.html").write_text(
         html(
             "今週末のイベント | miyagi-kids",
             weekend_body,
             description=f"今週末（{sat_str}〜{sun_str}）の子ども向けイベントまとめ。おすすめ3選・無料件数つき。",
             path="weekend.html",
-            og_image="ogp-weekend.png",   # ★これ
+            og_image=og_weekend_name,
         ),
         encoding="utf-8"
     )
