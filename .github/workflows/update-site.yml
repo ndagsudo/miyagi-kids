@@ -26,7 +26,11 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Build site
+      - name: Install dependencies
+        run: |
+          pip install pillow
+
+      - name: Run build script
         run: |
           python scripts/build.py
 
