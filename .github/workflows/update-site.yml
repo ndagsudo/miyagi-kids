@@ -34,6 +34,15 @@ jobs:
         run: |
           python scripts/build.py
 
+      - name: Debug list output
+        run: |
+          echo "=== repo root ==="
+          ls -la
+          echo "=== site ==="
+          ls -la site || true
+          echo "=== scripts/site ==="
+          ls -la scripts/site || true
+  
       # site/ を Pages の成果物としてアップロード
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
