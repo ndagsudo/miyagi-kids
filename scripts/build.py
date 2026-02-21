@@ -383,11 +383,25 @@ def generate_weekend_ogp(sat_str: str, sun_str: str, out_path: Path) -> None:
     ]
 
     def load_font(size: int):
-        for fp in font_paths:
+        candidates = [
+            # GitHub Actions (Ubuntu) で入ることが多い
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKJP-Regular.otf",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJKjp-Regular.otf",
+            # 万一の別名
+            "/usr/share/fonts/opentype/noto/NotoSansJP-Regular.otf",
+            "/usr/share/fonts/truetype/noto/NotoSansJP-Regular.otf",
+        ]
+
+        for fp in candidates:
             try:
                 return ImageFont.truetype(fp, size=size)
             except Exception:
                 pass
+
+        # 最終フォールバック（日本語は化けやすい）
         return ImageFont.load_default()
 
     font_title = load_font(64)
