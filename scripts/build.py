@@ -359,6 +359,64 @@ def _is_weekend(start_at: str) -> bool:
     except:
         return False
 
+
+from PIL import Image, ImageDraw, ImageFont
+
+def generate_weekend_ogp(sat_str: str, sun_str: str, out_path: Path) -> None:
+    """
+    週末日付入りのOGP画像（1200x630 png）を生成して out_path に保存
+    """
+    W, H = 1200, 630
+    img = Image.new("RGB", (W, H), (245, 247, 250))  # 薄いグレー
+    draw = ImageDraw.Draw(img)
+
+    # 角丸のカード風背景
+    pad = 60
+    card = (pad, pad, W - pad, H - pad)
+    draw.rounded_rectangle(card, radius=36, fill=(255, 255, 255), outline=(225, 230, 236), width=3)
+
+    # Windowsの日本語フォント（環境によってある/ないがあるのでフォールバック）
+    font_paths = [
+        r"C:\Windows\Fonts\YuGothM.ttc",  # 游ゴシック
+        r"C:\Windows\Fonts\meiryo.ttc",   # メイリオ
+        r"C:\Windows\Fonts\msgothic.ttc", # MS ゴシック
+    ]
+
+    def load_font(size: int):
+        for fp in font_paths:
+            try:
+                return ImageFont.truetype(fp, size=size)
+            except Exception:
+                pass
+        return ImageFont.load_default()
+
+    font_title = load_font(64)
+    font_sub = load_font(40)
+    font_small = load_font(30)
+
+    # テキスト内容
+    title = "今週末の子どもイベント"
+    date_line = f"{sat_str} 〜 {sun_str}"
+    brand = "miyagi-kids"
+
+    # 配置
+    left = pad + 70
+    top = pad + 90
+
+    draw.text((left, top), title, fill=(24, 32, 44), font=font_title)
+    draw.text((left, top + 90), date_line, fill=(50, 60, 74), font=font_sub)
+
+    # 下部に説明（小さめ）
+    draw.text((left, H - pad - 120), "おすすめ3選・無料もチェックできます", fill=(70, 80, 96), font=font_small)
+
+    # 右下にブランド
+    draw.text((W - pad - 260, H - pad - 90), brand, fill=(24, 32, 44), font=font_small)
+
+    # 保存
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_path, format="PNG", optimize=True)
+
+
 def build_site(con):
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     (SITE_DIR / "style.css").write_text(CSS, encoding="utf-8")
@@ -419,6 +477,8 @@ def build_site(con):
 
     sat_str = sat.isoformat()
     sun_str = sun.isoformat()
+
+    generate_weekend_ogp(sat_str, sun_str, SITE_DIR / "ogp-weekend.png")
 
     # show の中から「今週末に重なる」ものだけ
     weekend_items = [
@@ -695,7 +755,7 @@ def build_site(con):
             weekend_body,
             description=f"今週末（{sat_str}〜{sun_str}）の子ども向けイベントまとめ。おすすめ3選・無料件数つき。",
             path="weekend.html",
-        og_image="ogp-g4.png",  # ← ここ追加
+            og_image="ogp-weekend.png",   # ★これ
         ),
         encoding="utf-8"
     )
