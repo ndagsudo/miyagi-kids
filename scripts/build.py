@@ -359,70 +359,6 @@ def _is_weekend(start_at: str) -> bool:
     except:
         return False
 
-from PIL import Image, ImageDraw, ImageFont
-import os
-
-def generate_weekend_ogp(sat_str, sun_str, out_path):
-    W, H = 1200, 630
-
-    # --- 背景（グラデーション） ---
-    img = Image.new("RGB", (W, H), "#6EC6FF")
-    draw = ImageDraw.Draw(img)
-
-    for y in range(H):
-        r = 110
-        g = int(200 - (y / H) * 40)
-        b = 255
-        draw.line([(0, y), (W, y)], fill=(r, g, b))
-
-    # --- フォント ---
-    def load_font(size):
-        candidates = [
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        ]
-        for fp in candidates:
-            if os.path.exists(fp):
-                try:
-                    return ImageFont.truetype(fp, size)
-                except:
-                    pass
-        return ImageFont.load_default()
-
-    title_font = load_font(72)
-    date_font = load_font(42)
-    sub_font = load_font(36)
-
-    # --- テキスト ---
-    draw.text((100, 160), "今週末の子どもイベント",
-              font=title_font, fill="white")
-
-    draw.text((100, 260),
-              f"{sat_str}〜{sun_str}",
-              font=date_font, fill="white")
-
-    draw.text((100, 360),
-              "おすすめ3選・無料もチェックできます",
-              font=sub_font, fill="white")
-
-    # --- 右側イラスト風エリア ---
-    # 丸い背景
-    draw.ellipse((820, 180, 1150, 510), fill="#FFD54F")
-
-    # 風船
-    draw.ellipse((900, 220, 950, 280), fill="#FF6F61")
-    draw.line((925, 280, 925, 330), fill="gray", width=3)
-
-    # 子どもシルエット風
-    draw.ellipse((960, 300, 1020, 360), fill="#42A5F5")
-    draw.rectangle((980, 360, 1000, 430), fill="#42A5F5")
-
-    # ロゴ
-    draw.text((900, 520), "miyagi-kids",
-              font=load_font(28), fill="white")
-
-    img.save(out_path, format="PNG")
-
 def build_site(con):
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     (SITE_DIR / "style.css").write_text(CSS, encoding="utf-8")
@@ -483,8 +419,6 @@ def build_site(con):
 
     sat_str = sat.isoformat()
     sun_str = sun.isoformat()
-
-    generate_weekend_ogp(sat_str, sun_str, SITE_DIR / "ogp-weekend.png")
 
     # show の中から「今週末に重なる」ものだけ
     weekend_items = [
@@ -755,17 +689,13 @@ def build_site(con):
 </div>
 """
 
-    og_weekend_name = f"ogp-weekend-{sat_str.replace('-', '')}.png"
-    generate_weekend_ogp(sat_str, sun_str, SITE_DIR / og_weekend_name)
-
-    # weekend.html の書き出しで
     (SITE_DIR / "weekend.html").write_text(
         html(
             "今週末のイベント | miyagi-kids",
             weekend_body,
             description=f"今週末（{sat_str}〜{sun_str}）の子ども向けイベントまとめ。おすすめ3選・無料件数つき。",
             path="weekend.html",
-            og_image=og_weekend_name,
+        og_image="ogp-g4.png",  # ← ここ追加
         ),
         encoding="utf-8"
     )
