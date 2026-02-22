@@ -359,74 +359,69 @@ def _is_weekend(start_at: str) -> bool:
     except:
         return False
 
-
 from PIL import Image, ImageDraw, ImageFont
+import os
 
-def generate_weekend_ogp(sat_str: str, sun_str: str, out_path: Path) -> None:
-    """
-    週末日付入りのOGP画像（1200x630 png）を生成して out_path に保存
-    """
+def generate_weekend_ogp(sat_str, sun_str, out_path):
     W, H = 1200, 630
-    img = Image.new("RGB", (W, H), (245, 247, 250))  # 薄いグレー
+
+    # --- 背景（グラデーション） ---
+    img = Image.new("RGB", (W, H), "#6EC6FF")
     draw = ImageDraw.Draw(img)
 
-    # 角丸のカード風背景
-    pad = 60
-    card = (pad, pad, W - pad, H - pad)
-    draw.rounded_rectangle(card, radius=36, fill=(255, 255, 255), outline=(225, 230, 236), width=3)
+    for y in range(H):
+        r = 110
+        g = int(200 - (y / H) * 40)
+        b = 255
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
 
-    # Windowsの日本語フォント（環境によってある/ないがあるのでフォールバック）
-    font_paths = [
-        r"C:\Windows\Fonts\YuGothM.ttc",  # 游ゴシック
-        r"C:\Windows\Fonts\meiryo.ttc",   # メイリオ
-        r"C:\Windows\Fonts\msgothic.ttc", # MS ゴシック
-    ]
-
-    def load_font(size: int):
-        fp = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-        try:
-            font = ImageFont.truetype(fp, size=size)
-            print("[OGP] font OK:", fp, "size=", size)
-            return font
-        except Exception as e:
-            print("[OGP] font FAIL:", fp, "size=", size, "err=", repr(e))
-            return ImageFont.load_default()
-
+    # --- フォント ---
+    def load_font(size):
+        candidates = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ]
         for fp in candidates:
-            try:
-                return ImageFont.truetype(fp, size=size)
-            except Exception:
-                pass
-
-        # 最終フォールバック（日本語は化けやすい）
+            if os.path.exists(fp):
+                try:
+                    return ImageFont.truetype(fp, size)
+                except:
+                    pass
         return ImageFont.load_default()
 
-    font_title = load_font(64)
-    font_sub = load_font(40)
-    font_small = load_font(30)
+    title_font = load_font(72)
+    date_font = load_font(42)
+    sub_font = load_font(36)
 
-    # テキスト内容
-    title = "今週末の子どもイベント"
-    date_line = f"{sat_str} 〜 {sun_str}"
-    brand = "miyagi-kids"
+    # --- テキスト ---
+    draw.text((100, 160), "今週末の子どもイベント",
+              font=title_font, fill="white")
 
-    # 配置
-    left = pad + 70
-    top = pad + 90
+    draw.text((100, 260),
+              f"{sat_str}〜{sun_str}",
+              font=date_font, fill="white")
 
-    draw.text((left, top), title, fill=(24, 32, 44), font=font_title)
-    draw.text((left, top + 90), date_line, fill=(50, 60, 74), font=font_sub)
+    draw.text((100, 360),
+              "おすすめ3選・無料もチェックできます",
+              font=sub_font, fill="white")
 
-    # 下部に説明（小さめ）
-    draw.text((left, H - pad - 120), "おすすめ3選・無料もチェックできます", fill=(70, 80, 96), font=font_small)
+    # --- 右側イラスト風エリア ---
+    # 丸い背景
+    draw.ellipse((820, 180, 1150, 510), fill="#FFD54F")
 
-    # 右下にブランド
-    draw.text((W - pad - 260, H - pad - 90), brand, fill=(24, 32, 44), font=font_small)
+    # 風船
+    draw.ellipse((900, 220, 950, 280), fill="#FF6F61")
+    draw.line((925, 280, 925, 330), fill="gray", width=3)
 
-    # 保存
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out_path, format="PNG", optimize=True)
+    # 子どもシルエット風
+    draw.ellipse((960, 300, 1020, 360), fill="#42A5F5")
+    draw.rectangle((980, 360, 1000, 430), fill="#42A5F5")
 
+    # ロゴ
+    draw.text((900, 520), "miyagi-kids",
+              font=load_font(28), fill="white")
+
+    img.save(out_path, format="PNG")
 
 def build_site(con):
     SITE_DIR.mkdir(parents=True, exist_ok=True)
