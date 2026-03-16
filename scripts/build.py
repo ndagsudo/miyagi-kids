@@ -1411,7 +1411,7 @@ def html(title: str, body: str, *, description: str = "", path: str = "index.htm
 {head_ogp}
 </head>
 <body>
-<header class="topbar"><h1 class="logo">宮城の子どもイベント</h1></header>
+<header class="topbar"><h1 class="logo">仙台・宮城の子どもイベント</h1></header>
 <main class="container">
 {body}
 </main>
@@ -1496,6 +1496,7 @@ def build_site(con):
             pass
 
     body = f"<p class='meta'>更新: {updated}</p>"
+    body += "<p>仙台・宮城で開催される子ども向けイベントをまとめています。親子で楽しめる今週末のお出かけ、図書館イベント、科学館イベント、無料イベントを探せます。</p>"
     body += '<p><a href="weekend.html">▶ 今週末まとめページを見る</a></p>'
 
     # --- 検索バー + ボタン ---
@@ -1651,9 +1652,9 @@ def build_site(con):
 
     (SITE_DIR / "index.html").write_text(
         html(
-            "宮城の子どもイベント",
+            "仙台の子どもイベントまとめ｜今週末・親子で楽しめるお出かけ情報",
             body,
-            description="宮城（仙台周辺）の子ども向けイベントを検索・絞り込み（今週末/無料）できます。",
+            description="仙台・宮城の子ども向けイベントをまとめたサイトです。今週末の親子イベント、図書館、科学館、体験イベント、無料イベントを検索できます。",
             path="index.html",
         ),
         encoding="utf-8"
@@ -1749,11 +1750,11 @@ def build_site(con):
 
     (SITE_DIR / "weekend.html").write_text(
         html(
-            "今週末のイベント | miyagi-kids",
+            "今週末の仙台 子どもイベント｜親子で行けるおすすめお出かけ情報",
             weekend_body,
-            description=f"今週末（{sat_str}〜{sun_str}）の子ども向けイベントまとめ。おすすめ3選・無料件数つき。",
+            description=f"今週末（{sat_str}〜{sun_str}）に仙台・宮城で開催される子ども向けイベントをまとめました。親子で楽しめる体験イベント、図書館、科学館、無料イベントを掲載。",
             path="weekend.html",
-        og_image="ogp-g4.png",  # ← ここ追加
+            og_image="ogp-g4.png",
         ),
         encoding="utf-8"
     )
