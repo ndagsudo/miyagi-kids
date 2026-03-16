@@ -3,9 +3,12 @@ import csv
 import urllib.request
 import json
 import datetime as dt
+import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, date
 from pathlib import Path
 from html import escape
+from html.parser import HTMLParser
 
 print("RUNNING:", __file__)
 
@@ -208,6 +211,8 @@ CREATE TABLE IF NOT EXISTS events (
   tags_json TEXT,
   kid_score INTEGER
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_source_sourceid
+ON events(source, source_id);
 """
 
 def connect_db():
@@ -227,7 +232,7 @@ def download_csv(url: str):
         try:
             text = raw.decode(enc)
             break
-        except:
+        except Exception:
             continue
     else:
         text = raw.decode("utf-8", errors="replace")
@@ -235,7 +240,60 @@ def download_csv(url: str):
     if "<html" in text.lower():
         raise RuntimeError("CSVではなくHTMLを取得しています")
 
-    return list(csv.DictReader(text.splitlines()))
+    rows = list(csv.DictReader(text.splitlines()))
+    return rows
+
+def download_html(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req) as r:
+        raw = r.read()
+    return raw.decode("utf-8", errors="replace")
+
+def download_text(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req) as r:
+        raw = r.read()
+    return raw.decode("utf-8", errors="replace")
+
+def debug_print_html_head(url: str, limit: int = 2000):
+    html_text = download_html(url)
+    print("DEBUG URL:", url)
+    print(html_text[:limit])
+
+def debug_print_links(url: str):
+    html_text = download_html(url)
+    links = re.findall(r'href=["\']([^"\']+)["\']', html_text, flags=re.I)
+    print("DEBUG LINKS:", url)
+    for link in sorted(set(links)):
+        if "event" in link.lower():
+            print(link)
+
+def _japanese_dates_to_ymd_list(text: str):
+    dates = []
+    for y, m, d in re.findall(r"(\d{4})年(\d{1,2})月(\d{1,2})日", text):
+        dates.append(f"{int(y):04d}-{int(m):02d}-{int(d):02d}")
+    return dates
+
+def _wareki_to_seireki_year(y: int) -> int:
+    # 令和n年 → 2018 + n
+    return 2018 + y
+
+def _museum_dates_to_ymd_list(text: str):
+    dates = []
+
+    # 令和8年4月18日 のような形式
+    for y, m, d in re.findall(r"令和(\d+)年(\d{1,2})月(\d{1,2})日", text):
+        yy = _wareki_to_seireki_year(int(y))
+        dates.append(f"{yy:04d}-{int(m):02d}-{int(d):02d}")
+
+    return dates
+
+def _strip_tags(html_text: str) -> str:
+    t = re.sub(r"<script.*?</script>", " ", html_text, flags=re.S | re.I)
+    t = re.sub(r"<style.*?</style>", " ", html_text, flags=re.S | re.I)
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 # ===== 取り込み =====
 def import_sendai_events(con):
@@ -243,7 +301,7 @@ def import_sendai_events(con):
     print("CSV columns:", rows[0].keys())
 
     cur = con.cursor()
-    cur.execute("DELETE FROM events")
+    cur.execute("DELETE FROM events WHERE source=?", ("sendai_csv",))
 
     count = 0
     for r in rows:
@@ -253,10 +311,12 @@ def import_sendai_events(con):
 
         summary = r.get("summary") or ""
         start = r.get("startDate") or ""
-        end_ = r.get("endDate") or ""          # ★追加
+        end_ = r.get("endDate") or ""
         venue = r.get("locationName") or ""
         url = r.get("detailedUrl") or ""
-        source_id = r.get("entity_id") or r.get("_id") or title + start
+
+        base_id = r.get("entity_id") or r.get("_id") or title
+        source_id = f"{base_id}|{start}|{end_}"
 
         text = title + summary
         tags = {}
@@ -270,7 +330,7 @@ def import_sendai_events(con):
 
         cur.execute(
             """
-            INSERT INTO events
+            INSERT OR REPLACE INTO events
             (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """,
@@ -293,6 +353,1018 @@ def import_sendai_events(con):
 
     con.commit()
     print(f"Imported sendai events: {count}")
+
+KAGAKUKAN_LIST_URL = "https://www.kagakukan.sendai-c.ed.jp/event/"
+
+def import_kagakukan_events(con):
+    links = set()
+
+    # 最大10ページまで（空になったら途中で止める）
+    for page in range(1, 11):
+        if page == 1:
+            url = KAGAKUKAN_LIST_URL
+        else:
+            # ★ WordPressの一般的なページング形式
+            url = KAGAKUKAN_LIST_URL.rstrip("/") + f"/page/{page}/"
+
+        print("Fetch list:", url)
+
+        html_list = download_html(url)
+
+        # デバッグ：最初だけ少し表示（多すぎると見づらいので）
+        if page == 1:
+            print(html_list[:800])
+
+        # まずはこのページからイベント詳細URLを抽出
+        abs_links = re.findall(
+            r'https://www\.kagakukan\.sendai-c\.ed\.jp/event_/[\d]+/',
+            html_list
+        )
+
+        rel_links = [
+            "https://www.kagakukan.sendai-c.ed.jp" + p
+            for p in re.findall(r'href="(/event_/[\d]+/)"', html_list)
+        ]
+
+        found = set(abs_links + rel_links)
+        print("  found:", len(found))
+
+        # ★ 空ページならここで終了
+        if not found:
+            break
+
+        # ★ 既に集めたlinksに新規が無いなら終了（同じページを返す系対策）
+        before = len(links)
+        links.update(found)
+        if len(links) == before:
+            print("  no new links -> stop paging")
+            break
+
+    links = sorted(links)
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("kagakukan",))
+
+    count = 0
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            text = _strip_tags(detail_html)
+
+            # title はHTMLから取る（今の方法でOK）
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I|re.S)
+            title = (m.group(1) if m else "").strip()
+            title = re.sub(r"\s+", " ", title)
+            title = title.replace(
+                "｜HOKUSHU仙台市科学館 -HOKUSHU  SENDAI CITY SCIENCE MUSEUM –", ""
+            ).strip(" –-")
+
+            ymds = _japanese_dates_to_ymd_list(text)
+            print("DATE CHECK:", url, "->", ymds[:3])
+
+            if not ymds:
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            summary = text
+            if len(summary) > 220:
+                summary = summary[:220] + "…"
+
+            tags = {}
+            kid_score = 60
+            combined = (title + " " + summary)
+
+            if any(x in combined for x in ["小学生", "親子", "子ども", "体験", "工作"]):
+                tags["elem"] = True
+                kid_score = 80
+
+            if any(x in combined for x in ["無料", "参加費 無料", "参加費無料"]):
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "kagakukan",
+                    url,  # source_id
+                    title or "仙台市科学館 イベント",
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "仙台市",
+                    "仙台市科学館",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[kagakukan] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported kagakukan events: {count}")
+
+TOHOKU_SCIENCE_URL = "https://www.ip.eng.tohoku.ac.jp/campus/science/"
+
+def import_tohoku_science_events(con):
+    html_top = download_html(TOHOKU_SCIENCE_URL)
+
+    links = sorted(set(
+        re.findall(r'https://science-community\.jp/event/detail\.php\?event_id=\d+', html_top)
+    ))
+
+    print("Found tohoku science links:", len(links))
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("tohoku_science",))
+
+    count = 0
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            text = _strip_tags(detail_html)
+
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = (m.group(1) if m else "").strip()
+            title = re.sub(r"\s+", " ", title)
+
+            ymds = _japanese_dates_to_ymd_list(text)
+            print("TOHOKU DATE CHECK:", url, "->", ymds[:3])
+
+            if not ymds:
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            summary = text
+            if len(summary) > 220:
+                summary = summary[:220] + "…"
+
+            tags = {}
+            kid_score = 60
+            combined = title + " " + summary
+
+            if any(x in combined for x in ["小学生", "親子", "子ども", "体験", "工作", "科学", "実験"]):
+                tags["elem"] = True
+                kid_score = 80
+
+            if "無料" in combined:
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "tohoku_science",
+                    url,
+                    title or "東北大学サイエンスキャンパス",
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "仙台市",
+                    "東北大学サイエンスキャンパス",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[tohoku_science] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported tohoku_science events: {count}")
+
+SENDAI_ASTRO_ATOM_URL = "https://www.sendai-astro.jp/event/atom.xml"
+
+def import_sendai_astro_events(con):
+    xml_text = download_text(SENDAI_ASTRO_ATOM_URL)
+
+    entries = re.findall(r"<entry>(.*?)</entry>", xml_text, flags=re.S)
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("sendai_astro",))
+
+    count = 0
+
+    for e in entries:
+
+        # タイトル
+        m = re.search(r"<title>(.*?)</title>", e, flags=re.S)
+        title = m.group(1).strip() if m else "仙台市天文台イベント"
+
+        # URL
+        m = re.search(r'<link.*?href="(.*?)"', e)
+        url = m.group(1) if m else ""
+
+        # 本文HTML
+        m = re.search(r"<content.*?>(.*?)</content>", e, flags=re.S)
+        html = m.group(1) if m else ""
+
+        text = _strip_tags(html)
+
+        # ★ここが重要（本文から日本語日付を取得）
+        ymds = _japanese_dates_to_ymd_list(text)
+
+        if ymds:
+            start_day = min(ymds)
+            end_day = max(ymds)
+        else:
+            # fallback（記事公開日）
+            m = re.search(r"<published>(.*?)</published>", e)
+            start_day = m.group(1)[:10] if m else ""
+            end_day = start_day
+
+        summary = text[:220] + "…" if len(text) > 220 else text
+
+        tags = {}
+        kid_score = 60
+
+        combined = title + " " + summary
+
+        if any(x in combined for x in ["子ども", "親子", "小学生", "星", "宇宙", "観察"]):
+            tags["kids"] = True
+            kid_score = 80
+
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO events
+            (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "sendai_astro",
+                url,
+                title,
+                summary,
+                url,
+                start_day,
+                end_day,
+                "仙台市",
+                "仙台市天文台",
+                "unknown",
+                json.dumps(tags, ensure_ascii=False),
+                kid_score,
+            )
+        )
+
+        count += 1
+
+    con.commit()
+    print(f"Imported sendai_astro events: {count}")
+
+MIYAGI_LIBRARY_SCHEDULE_URL = "https://www.library.pref.miyagi.jp/events/schedule/index.html"
+MIYAGI_LIBRARY_BASE = "https://www.library.pref.miyagi.jp"
+
+
+class _HrefParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hrefs = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "a":
+            return
+        for k, v in attrs:
+            if k.lower() == "href" and v:
+                self.hrefs.append(v)
+
+
+def import_miyagi_library_events(con):
+    html_list = download_html(MIYAGI_LIBRARY_SCHEDULE_URL)
+
+    parser = _HrefParser()
+    parser.feed(html_list)
+
+    links = []
+    for href in parser.hrefs:
+        href = href.strip()
+
+        # 絶対パス型
+        if href.startswith("/events/schedule/") and href.endswith(".html"):
+            # 2025 / 2026 だけ対象
+            if "/events/schedule/2025/" in href or "/events/schedule/2026/" in href:
+                links.append(MIYAGI_LIBRARY_BASE + href)
+
+        # 相対パス型
+        elif href.startswith("./") and href.endswith(".html"):
+            full = "https://www.library.pref.miyagi.jp/events/schedule/" + href[2:]
+            if "/events/schedule/2025/" in full or "/events/schedule/2026/" in full:
+                links.append(full)
+
+    links = sorted(set(links))
+
+    print("Found miyagi_library links:", len(links))
+    if links[:5]:
+        print("Sample miyagi_library links:", links[:5])
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("miyagi_library",))
+
+    count = 0
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            text = _strip_tags(detail_html)
+
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = (m.group(1) if m else "").strip()
+            title = re.sub(r"\s+", " ", title)
+
+            # 終了イベント除外
+            if "終了しました" in title:
+                continue
+
+            # 日付抽出：西暦 + 和暦
+            ymds = []
+            ymds += _japanese_dates_to_ymd_list(text)
+            ymds += _museum_dates_to_ymd_list(text)
+            ymds = sorted(set(ymds))
+
+            if not ymds:
+                pass
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            summary = text
+            if len(summary) > 220:
+                summary = summary[:220] + "…"
+
+            tags = {}
+            kid_score = 60
+            combined = title + " " + summary
+
+            if any(x in combined for x in ["子ども", "親子", "小学生", "おはなし", "工作", "展示", "わらべうた", "紙芝居"]):
+                tags["kids"] = True
+                kid_score = 80
+
+            if "無料" in combined:
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "miyagi_library",
+                    url,
+                    title or "宮城県図書館イベント",
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "宮城県",
+                    "宮城県図書館",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[miyagi_library] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported miyagi_library events: {count}")
+
+SENDAI_MUSEUM_EVENT_URL = "https://www.city.sendai.jp/museum/koza/event.html"
+
+def import_sendai_museum_events(con):
+    html_text = download_html(SENDAI_MUSEUM_EVENT_URL)
+    text = _strip_tags(html_text)
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("sendai_museum",))
+
+    blocks = []
+
+    # 記事本文から、見出しっぽい単位でざっくり区切る
+    candidates = re.split(r"(記念講演会|もしも博物館資料が人のように話したら？|ねこけし絵付け体験|変身タイム「.*?」)", text)
+
+    if len(candidates) > 1:
+        merged = []
+        i = 1
+        while i < len(candidates):
+            title = candidates[i].strip()
+            body = candidates[i + 1].strip() if i + 1 < len(candidates) else ""
+            merged.append((title, body))
+            i += 2
+        blocks = merged
+
+    count = 0
+
+    for title, body in blocks:
+        ymds = _museum_dates_to_ymd_list(body)
+        if not ymds:
+            continue
+
+        start_day = min(ymds)
+        end_day = max(ymds)
+
+        summary = body[:220] + "…" if len(body) > 220 else body
+
+        tags = {}
+        kid_score = 60
+        combined = title + " " + summary
+
+        if any(x in combined for x in ["子ども", "親子", "工作", "体験", "お姫様", "変身", "猫"]):
+            tags["kids"] = True
+            kid_score = 80
+
+        if "無料" in combined:
+            tags["free"] = True
+
+        source_id = f"{title}|{start_day}|{end_day}"
+
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO events
+            (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "sendai_museum",
+                source_id,
+                title,
+                summary,
+                SENDAI_MUSEUM_EVENT_URL,
+                start_day,
+                end_day,
+                "仙台市",
+                "仙台市博物館",
+                "free" if tags.get("free") else "unknown",
+                json.dumps(tags, ensure_ascii=False),
+                kid_score,
+            )
+        )
+        count += 1
+
+    con.commit()
+    print(f"Imported sendai_museum events: {count}")
+
+AEONMALL_NATORI_EVENT_URL = "https://natori-aeonmall.com/news/event/"
+AEONMALL_NATORI_BASE_URL = "https://natori-aeonmall.com"
+
+def _slash_dates_to_ymd_list(text: str):
+    dates = []
+    for y, m, d in re.findall(r"(\d{4})/(\d{1,2})/(\d{1,2})", text):
+        dates.append(f"{int(y):04d}-{int(m):02d}-{int(d):02d}")
+    return dates
+
+
+def _extract_aeonmall_event_blocks(html_text: str):
+    """
+    一覧ページの本文から、イベントごとのテキスト塊をざっくり抽出する
+    """
+    text = _strip_tags(html_text)
+
+    # 日付開始っぽい位置で分割
+    chunks = re.split(r'(?=\d{4}/\d{1,2}/\d{1,2})', text)
+
+    blocks = []
+    for chunk in chunks:
+        chunk = re.sub(r"\s+", " ", chunk).strip()
+        if len(chunk) < 20:
+            continue
+        if "開催" not in chunk:
+            continue
+        blocks.append(chunk)
+
+    return blocks
+
+
+def _extract_aeonmall_dates(text: str):
+    """
+    イオンモール名取の一覧本文に出る日付を YYYY-MM-DD の配列で返す
+    例:
+      2026/03/20
+      2026/03/20〜2026/03/24
+    """
+    dates = []
+
+    # 2026/03/20 形式
+    for y, m, d in re.findall(r'(\d{4})/(\d{1,2})/(\d{1,2})', text):
+        dates.append(f"{int(y):04d}-{int(m):02d}-{int(d):02d}")
+
+    return sorted(set(dates))
+
+
+def import_aeonmall_natori_events(con):
+    html_list = download_html(AEONMALL_NATORI_EVENT_URL)
+
+    # 一覧から詳細URLを拾う
+    rel_links = re.findall(r'href=["\'](/event/[0-9a-f\-]+)["\']', html_list, flags=re.I)
+    links = sorted(set(AEONMALL_NATORI_BASE_URL + p for p in rel_links))
+
+    print("Found aeonmall_natori links:", len(links))
+
+    # 一覧本文からイベントごとの塊を取る
+    blocks = _extract_aeonmall_event_blocks(html_list)
+    print("Found aeonmall_natori blocks:", len(blocks))
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("aeonmall_natori",))
+
+    count = 0
+
+    # 一覧の塊と詳細URLを順番対応でなるべく合わせる
+    for i, url in enumerate(links):
+        try:
+            block = blocks[i] if i < len(blocks) else ""
+
+            # 日付は一覧から取る
+            ymds = _extract_aeonmall_dates(block)
+
+            if not ymds:
+                # block から取れない場合は詳細本文も試す
+                detail_html = download_html(url)
+                detail_text = _strip_tags(detail_html)
+                ymds = _extract_aeonmall_dates(detail_text)
+
+                if not ymds:
+                    print("[aeonmall_natori] no date:", url)
+                    continue
+            else:
+                detail_html = download_html(url)
+                detail_text = _strip_tags(detail_html)
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            # タイトルは詳細ページの <title> を優先
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = (m.group(1) if m else "").strip()
+            title = re.sub(r"\s+", " ", title)
+
+            # 「終了しました」を除外
+            if "終了しました" in title or "【終了しました】" in title:
+                print("[miyagi_library] skip ended:", url)
+                continue
+
+            # サイト名除去
+            title = title.replace("｜イオンモール名取", "").strip()
+            title = title.replace("| イオンモール名取", "").strip()
+            title = title.replace(" - イオンモール名取", "").strip()
+
+            if not title:
+                # 保険：一覧塊から仮タイトル
+                lines = [x.strip() for x in re.split(r"\s+", block) if x.strip()]
+                for line in lines:
+                    if len(line) < 4:
+                        continue
+                    if any(bad in line for bad in [
+                        "開催", "時間", "場所", "料金", "アクセス",
+                        "イベント情報", "該当するイベントがありません"
+                    ]):
+                        continue
+                    title = line
+                    break
+
+            if not title:
+                title = "イオンモール名取イベント"
+
+            summary = "イオンモール名取で開催されるイベントです。詳細は公式ページをご確認ください。"
+
+            tags = {}
+            kid_score = 60
+            combined = title + " " + summary
+
+            if any(x in combined for x in [
+                "子ども", "親子", "小学生", "ワークショップ", "工作",
+                "体験", "キャラクター", "ショー", "バルーン",
+                "サイエンス", "撮影会", "キッズ"
+            ]):
+                tags["kids"] = True
+                kid_score = 80
+
+            if "無料" in combined:
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "aeonmall_natori",
+                    url,
+                    title,
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "名取市",
+                    "イオンモール名取",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[aeonmall_natori] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported aeonmall_natori events: {count}")
+
+AEONMALL_KAMISUGI_NEWS_URL = "https://sendaikamisugi.aeonmall.com/news"
+AEONMALL_KAMISUGI_BASE_URL = "https://sendaikamisugi.aeonmall.com"
+
+def import_aeonmall_kamisugi_events(con):
+    html_list = download_html(AEONMALL_KAMISUGI_NEWS_URL)
+
+    # /news/detail/123 や /news/detail/123?t=event_news を拾う
+    rel_links = re.findall(
+        r'href=["\'](/news/detail/\d+\?t=event_news)["\']',
+        html_list,
+        flags=re.I
+    )
+    links = sorted(set(AEONMALL_KAMISUGI_BASE_URL + p for p in rel_links))
+    links = [u for u in links if "?t=event_news" in u]
+
+    print("Found aeonmall_kamisugi event links:", len(links))
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("aeonmall_kamisugi",))
+
+    count = 0
+
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            detail_text = _strip_tags(detail_html)
+
+            # タイトル
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = (m.group(1) if m else "").strip()
+            title = re.sub(r"\s+", " ", title)
+            title = title.replace("イオンモール仙台上杉公式ホームページ | NEWS |", "").strip()
+
+            # サイト名除去
+            title = title.replace("｜イオンモール仙台上杉", "").strip()
+            title = title.replace("| イオンモール仙台上杉", "").strip()
+            title = title.replace(" - イオンモール仙台上杉", "").strip()
+            title = re.sub(r"\s+", " ", title).strip()
+
+            if not title:
+                continue
+
+            # 日付候補
+            ymds = []
+            ymds += _extract_aeonmall_dates(detail_text)      # 2026/03/20 形式
+            ymds += _japanese_dates_to_ymd_list(detail_text) # 2026年3月20日 形式
+            ymds = sorted(set(ymds))
+
+            if not ymds:
+                print("[aeonmall_kamisugi] no date:", url)
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            # summary
+            summary = re.sub(r"\s+", " ", detail_text).strip()
+            if title and summary.startswith(title):
+                summary = summary[len(title):].strip()
+
+            for noise in [
+                "イオンモール仙台上杉",
+                "営業時間",
+                "アクセス",
+                "フロアガイド",
+                "ショップニュース",
+                "ニュース一覧",
+                "請求時5%OFF", 
+                "お客さま感謝デー", 
+                "新規入会", 
+                "専門店限定"
+            ]:
+                summary = summary.replace(noise, "")
+
+            summary = re.sub(r"\s+", " ", summary).strip()
+            if len(summary) > 180:
+                summary = summary[:180] + "…"
+
+            if not summary:
+                summary = "イオンモール仙台上杉で開催されるイベントです。詳細は公式ページをご確認ください。"
+
+            # 販促系ニュースをざっくり除外
+            ng_words = [
+                "請求時", "5%OFF", "セール", "キャンペーン", "入会",
+                "ノベルティ", "新商品", "期間限定ショップ"
+            ]
+            if any(x in title for x in ng_words):
+                print("[aeonmall_kamisugi] skip non-event:", title)
+                continue
+
+            tags = {}
+            kid_score = 60
+            combined = title + " " + summary
+
+            if any(x in combined for x in [
+                "子ども", "親子", "小学生", "ワークショップ", "工作",
+                "体験", "キャラクター", "ショー", "撮影会",
+                "キッズ", "イベント", "茶道", "無料"
+            ]):
+                tags["kids"] = True
+                kid_score = 80
+
+            if "無料" in combined:
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "aeonmall_kamisugi",
+                    url,
+                    title,
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "仙台市",
+                    "イオンモール仙台上杉",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[aeonmall_kamisugi] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported aeonmall_kamisugi events: {count}")
+
+MITSUI_OUTLET_SENDAI_EVENT_URL = "https://mitsui-shopping-park.com/mop/sendai/event/"
+MITSUI_OUTLET_SENDAI_BASE_URL = "https://mitsui-shopping-park.com"
+
+def import_mitsui_outlet_sendai_events(con):
+    html_list = download_html(MITSUI_OUTLET_SENDAI_EVENT_URL)
+
+    rel_links = re.findall(r'href=["\'](/mop/sendai/event/\d+\.html)["\']', html_list, flags=re.I)
+    links = sorted(set(MITSUI_OUTLET_SENDAI_BASE_URL + p for p in rel_links))
+
+    print("Found mitsui_outlet_sendai links:", len(links))
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("mitsui_outlet_sendai",))
+
+    count = 0
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            text = _strip_tags(detail_html)
+
+            # タイトル
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = (m.group(1) if m else "").strip()
+            title = re.sub(r"\s+", " ", title)
+
+            # サイト名を削る
+            title = title.replace(" | 三井アウトレットパーク 仙台港", "").strip()
+            title = title.replace("｜三井アウトレットパーク 仙台港", "").strip()
+            title = title.replace(" | 三井アウトレットパーク", "").strip()
+
+            # 日付候補を集める
+            ymds = []
+            ymds += _japanese_dates_to_ymd_list(text)
+            ymds += _slash_dates_to_ymd_list(text)
+            try:
+                ymds += _museum_dates_to_ymd_list(text)
+            except Exception:
+                pass
+
+            ymds = sorted(set(ymds))
+            if not ymds:
+                print("[mitsui_outlet_sendai] no date:", url)
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            # summary は本文から
+            summary = re.sub(r"\s+", " ", text).strip()
+            if title and summary.startswith(title):
+                summary = summary[len(title):].strip()
+
+            # ノイズ軽減
+            for noise in [
+                "三井アウトレットパーク 仙台港",
+                "営業時間",
+                "アクセス",
+                "フロアガイド",
+                "ショップ検索",
+            ]:
+                summary = summary.replace(noise, "")
+
+            summary = re.sub(r"\s+", " ", summary).strip()
+            if len(summary) > 180:
+                summary = summary[:180] + "…"
+
+            if not summary:
+                summary = "三井アウトレットパーク仙台港で開催されるイベントです。詳細は公式ページをご確認ください。"
+
+            tags = {}
+            kid_score = 60
+            combined = title + " " + summary
+
+            if any(x in combined for x in [
+                "子ども", "親子", "小学生", "ワークショップ", "工作",
+                "体験", "キャラクター", "ショー", "撮影会",
+                "キッズ", "ふわふわ", "イベント"
+            ]):
+                tags["kids"] = True
+                kid_score = 80
+
+            if "無料" in combined:
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "mitsui_outlet_sendai",
+                    url,
+                    title or "三井アウトレットパーク仙台港イベント",
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "仙台市",
+                    "三井アウトレットパーク仙台港",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[mitsui_outlet_sendai] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported mitsui_outlet_sendai events: {count}")
+
+# ===== 仙台泉プレミアムアウトレット =====
+
+SENDai_IZUMI_OUTLET_URL = "https://www.premiumoutlets.co.jp/sendaiizumi/events/"
+SENDai_IZUMI_OUTLET_BASE = "https://www.premiumoutlets.co.jp"
+
+def import_sendai_izumi_outlet_events(con):
+
+    html_list = download_html(SENDai_IZUMI_OUTLET_URL)
+
+    # hrefから拾う
+    rel_links = re.findall(
+        r'href=["\'](/sendaiizumi/events/news\d+\.html)["\']',
+        html_list,
+        flags=re.I
+    )
+
+    # hrefに出ていない場合の保険
+    raw_links = re.findall(
+        r'/sendaiizumi/events/news\d+\.html',
+        html_list,
+        flags=re.I
+    )
+
+    all_rel = sorted(set(rel_links + raw_links))
+    links = sorted(set(SENDai_IZUMI_OUTLET_BASE + p for p in all_rel))
+
+    print("Found izumi_outlet links:", len(links))
+
+    if not links:
+        print("DEBUG izumi_outlet html head:")
+        print(html_list[:2000])
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("izumi_outlet",))
+
+    count = 0
+
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            text = _strip_tags(detail_html)
+
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = (m.group(1) if m else "").strip()
+            title = re.sub(r"\s+", " ", title)
+
+            title = title.replace(" | 仙台泉プレミアム・アウトレット", "")
+            title = title.replace("｜仙台泉プレミアム・アウトレット", "")
+            title = title.replace(" - 最新情報", "")
+            title = title.strip()
+
+            ymds = []
+            ymds += _japanese_dates_to_ymd_list(text)
+            ymds += _slash_dates_to_ymd_list(text)
+            ymds = sorted(set(ymds))
+
+            if not ymds:
+                print("[izumi_outlet] no date:", url)
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            summary = re.sub(r"\s+", " ", text).strip()
+            if title and summary.startswith(title):
+                summary = summary[len(title):].strip()
+
+            for noise in [
+                "NEWS一覧を見る",
+                "イベントカレンダーを見る",
+                "プレミアム・ アウトレット ニュース",
+                "ショップ ニュース",
+                "期間限定 ショップ",
+                "SENDAI-IZUMI",
+                "PREMIUM OUTLETS®",
+            ]:
+                summary = summary.replace(noise, "")
+
+            summary = re.sub(r"\s+", " ", summary).strip()
+            if len(summary) > 180:
+                summary = summary[:180] + "…"
+
+            if not summary:
+                summary = "仙台泉プレミアムアウトレットで開催されるイベントです。詳細は公式ページをご確認ください。"
+
+            tags = {}
+            kid_score = 60
+            combined = title + " " + summary
+
+            if any(x in combined for x in [
+                "子ども", "親子", "小学生", "キッズ", "ワークショップ",
+                "工作", "体験", "撮影会", "イベント", "バスツアー"
+            ]):
+                tags["kids"] = True
+                kid_score = 80
+
+            if "無料" in combined:
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "izumi_outlet",
+                    url,
+                    title or "仙台泉プレミアムアウトレットイベント",
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "仙台市泉区",
+                    "仙台泉プレミアムアウトレット",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+
+            count += 1
+
+        except Exception as e:
+            print("[izumi_outlet] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported izumi_outlet events: {count}")
+
+
 
 # ===== HTML =====
 from datetime import datetime
@@ -367,21 +1439,7 @@ def build_site(con):
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # 列取得
-    cols = [r[1] for r in con.execute("PRAGMA table_info(events)").fetchall()]
-
-    url_candidates = [
-        "detailedUrl", "detailUrl",
-        "detailed_url", "detail_url",
-        "url", "event_url", "link", "source_url"
-    ]
-    url_col = next((c for c in url_candidates if c in cols), None)
-
-    # SELECT（tags_json + kid_score も取得）
-    if url_col:
-        sql = f"SELECT title, summary, start_at, end_at, venue_name, tags_json, kid_score, {url_col} FROM events"
-    else:
-        sql = "SELECT title, summary, start_at, end_at, venue_name, tags_json, kid_score, '' as url FROM events"
-
+    sql = "SELECT title, summary, start_at, end_at, venue_name, tags_json, kid_score, url FROM events"
     rows = con.execute(sql).fetchall()
 
     future, past = [], []
@@ -703,8 +1761,18 @@ def build_site(con):
 def main():
     con = connect_db()
     import_sendai_events(con)
+    import_kagakukan_events(con)
+    import_tohoku_science_events(con)
+    import_sendai_astro_events(con)
+    import_sendai_museum_events(con)
+    import_miyagi_library_events(con)
+    import_aeonmall_kamisugi_events(con)
+    # import_aeonmall_natori_events(con)   # ←一旦保留でもOK
+    import_mitsui_outlet_sendai_events(con)
+    # import_sendai_izumi_outlet_events(con)   # ←ここを一旦止める
     build_site(con)
     con.close()
+
 
 if __name__ == "__main__":
     main()
