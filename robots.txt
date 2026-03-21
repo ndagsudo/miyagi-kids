@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ndagsudo.github.io/miyagi-kids/sitemap.xml
