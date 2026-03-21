@@ -1660,6 +1660,19 @@ def build_site(con):
         encoding="utf-8"
     )
 
+    # sitemap.xml を生成
+    sitemap = """<?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url>
+        <loc>https://ndagsudo.github.io/miyagi-kids/</loc>
+      </url>
+      <url>
+        <loc>https://ndagsudo.github.io/miyagi-kids/weekend.html</loc>
+      </url>
+    </urlset>
+    """
+
+    (SITE_DIR / "sitemap.xml").write_text(sitemap, encoding="utf-8")
 
     # ===== 今週末ページ生成（おすすめ3選つき） =====
     weekend_title = f"今週末（{sat_str}〜{sun_str}）のイベント"
