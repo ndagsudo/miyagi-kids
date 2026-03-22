@@ -2416,6 +2416,7 @@ def build_site(con):
     body = f"<p class='meta'>更新: {updated}</p>"
     body += "<p>仙台・宮城で開催される子ども向けイベントをまとめています。親子で楽しめる今週末のお出かけ、図書館イベント、科学館イベント、無料イベントを探せます。</p>"
     body += '<p><a href="weekend.html">▶ 今週末まとめページを見る</a></p>'
+    body += '<p><a href="privacy.html">プライバシーポリシー</a></p>'
 
     # --- 検索バー + ボタン ---
     body += """
