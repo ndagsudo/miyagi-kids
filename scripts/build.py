@@ -1381,6 +1381,9 @@ def html(title: str, body: str, *, description: str = "", path: str = "index.htm
     page_url = f"{site_url}/{path.lstrip('/')}" if site_url else ""
     og_img_url = f"{site_url}/{og_image.lstrip('/')}" if site_url else ""
 
+    depth = path.count("/")
+    asset_prefix = "../" * depth
+
     # description が空なら title を流用
     desc = description.strip() or title.strip()
 
@@ -1407,7 +1410,7 @@ def html(title: str, body: str, *, description: str = "", path: str = "index.htm
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)}</title>
 <meta name="description" content="{escape(desc)}">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="{asset_prefix}style.css">
 {head_ogp}
 </head>
 <body>
