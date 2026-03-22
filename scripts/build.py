@@ -1191,6 +1191,21 @@ def import_mitsui_outlet_sendai_events(con):
             if not summary:
                 summary = "三井アウトレットパーク仙台港で開催されるイベントです。詳細は公式ページをご確認ください。"
 
+            skip_words = [
+                "学割", "学生限定", "アンケート", "ご回答", "抽選",
+                "ポイント", "当たる", "プレゼント", "進呈",
+                "応募", "エントリー", "会員登録", "入会",
+                "キャンペーン", "セール", "特典", "優待",
+                "クーポン", "お買物券", "買い物券",
+                "document.addEventListener", "lazyload()", "DOMContentLoaded",
+            ]
+
+            combined_text = f"{title} {summary}"
+
+            if any(x in combined_text for x in skip_words):
+                print("[mitsui_outlet_sendai] skip non-event:", title)
+                continue
+
             tags = {}
             kid_score = 60
             combined = title + " " + summary
@@ -1234,6 +1249,801 @@ def import_mitsui_outlet_sendai_events(con):
 
     con.commit()
     print(f"Imported mitsui_outlet_sendai events: {count}")
+
+# ===== 仙台うみの杜水族館 =====
+
+UMINOMORI_BASE_URL = "https://www.uminomori.jp"
+UMINOMORI_TOP_URL = "https://www.uminomori.jp/umino/index.html"
+UMINOMORI_EVENT_INDEX_URL = "https://www.uminomori.jp/umino/event/index.html"
+UMINOMORI_EVENT_SORTTIME_URL = "https://www.uminomori.jp/umino/event/sorttime/index.html"
+UMINOMORI_NEWS_INDEX_URL = "https://www.uminomori.jp/umino/news/index.html"
+
+
+def _normalize_zenkaku(text: str) -> str:
+    """
+    全角数字・全角記号を半角に寄せる
+    例: ２０２６年３月２０日 → 2026年3月20日
+    """
+    if not text:
+        return ""
+    table = str.maketrans({
+        "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+        "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+        "／": "/", "～": "〜", "−": "-", "ー": "-",
+        "（": "(", "）": ")",
+        "：": ":", "　": " ",
+    })
+    return text.translate(table)
+
+
+def _clean_uminomori_title(title: str) -> str:
+    if not title:
+        return ""
+
+    title = re.sub(r"\s+", " ", title).strip()
+
+    for noise in [
+        "｜仙台うみの杜水族館",
+        "| 仙台うみの杜水族館",
+        " - 仙台うみの杜水族館",
+        "｜イベントスケジュール",
+        "| イベントスケジュール",
+    ]:
+        title = title.replace(noise, "").strip()
+
+    return re.sub(r"\s+", " ", title).strip()
+
+def _extract_uminomori_candidate_links(html_text: str):
+    """
+    うみの杜トップ/イベント一覧/時間別/ニュース一覧などから
+    候補URLを幅広く拾う
+    """
+    links = set()
+
+    # /umino/event/*.html
+    for p in re.findall(r'href=["\'](/umino/event/[^"\']+\.html)["\']', html_text, flags=re.I):
+        full = UMINOMORI_BASE_URL + p
+
+        # 一覧・時間別・常設系を除外
+        if any(x in full for x in [
+            "/umino/event/index.html",
+            "/umino/event/sorttime/index.html",
+            "/umino/event/sol.html",
+        ]):
+            continue
+
+        links.add(full)
+
+    # /umino/news/12345/index.html
+    for p in re.findall(r'href=["\'](/umino/news/\d+/index\.html)["\']', html_text, flags=re.I):
+        links.add(UMINOMORI_BASE_URL + p)
+
+    # /umino/xxxxx/index.html （特設ページ）
+    for p in re.findall(r'href=["\'](/umino/[^"\']+/index\.html)["\']', html_text, flags=re.I):
+        full = UMINOMORI_BASE_URL + p
+
+        # ノイズ系を除外
+        if any(x in full for x in [
+            "/umino/info/",
+            "/umino/guide/",
+            "/umino/access/",
+            "/umino/passport/",
+            "/umino/sitemap/",
+            "/umino/faq/",
+            "/umino/contact/",
+            "/umino/news/index.html",
+            "/umino/event/index.html",
+            "/umino/event/sorttime/index.html",
+            "/umino/index.html",
+            "/umino/app_official/",
+            "/umino/reserve/",
+            "/umino/webket/",
+            "/umino/uminomori_notice",
+            "/umino/7318/",
+        ]):
+            continue
+
+        links.add(full)
+
+    return sorted(links)
+
+def _extract_uminomori_dates(text: str):
+    """
+    うみの杜向け日付抽出
+    対応:
+    - 2026年3月20日
+    - 2026/3/20
+    - 令和8年4月18日
+    - 3月6日（金）～4月9日（木）
+    - 12月1日(月)～3月31日(火)
+    """
+    norm = _normalize_zenkaku(text)
+
+    ymds = []
+    ymds += _japanese_dates_to_ymd_list(norm)
+    ymds += _slash_dates_to_ymd_list(norm)
+
+    try:
+        ymds += _museum_dates_to_ymd_list(norm)
+    except Exception:
+        pass
+
+    # まず年ありが取れていればそれを優先
+    if ymds:
+        return sorted(set(ymds))
+
+    # 年なしの月日を拾う
+    md_pairs = re.findall(r'(\d{1,2})月\s*(\d{1,2})日', norm)
+    if not md_pairs:
+        return []
+
+    today = dt.date.today()
+    current_year = today.year
+
+    parsed = []
+    for m, d in md_pairs:
+        mm = int(m)
+        dd = int(d)
+        parsed.append((mm, dd))
+
+    # 1件だけなら「今年」とみなす
+    if len(parsed) == 1:
+        mm, dd = parsed[0]
+        return [f"{current_year:04d}-{mm:02d}-{dd:02d}"]
+
+    # 複数件ある場合
+    months = [mm for mm, dd in parsed]
+    min_m = min(months)
+    max_m = max(months)
+
+    results = []
+
+    # 例: 12月→3月 のように年またぎ
+    if max_m - min_m >= 6:
+        for mm, dd in parsed:
+            year = current_year - 1 if mm >= 10 else current_year
+            results.append(f"{year:04d}-{mm:02d}-{dd:02d}")
+    else:
+        # 同一年内とみなす
+        for mm, dd in parsed:
+            results.append(f"{current_year:04d}-{mm:02d}-{dd:02d}")
+
+    return sorted(set(results))
+
+def _make_uminomori_summary(title: str, text: str):
+    norm = _normalize_zenkaku(text)
+    summary = re.sub(r"\s+", " ", norm).strip()
+
+    if title and summary.startswith(title):
+        summary = summary[len(title):].strip()
+
+    for noise in [
+        "仙台うみの杜水族館",
+        "営業時間・料金",
+        "イベントスケジュール",
+        "館内ガイド",
+        "アクセス",
+        "年間パスポート",
+        "お知らせ",
+        "TOP",
+        "イベント概要",
+        "時間別",
+        "イベント別",
+        "チケットの購入はこちら",
+        "サイト利用ポリシー",
+        "Copyright",
+    ]:
+        summary = summary.replace(noise, " ")
+
+    summary = re.sub(r"\s+", " ", summary).strip()
+
+    if len(summary) > 180:
+        summary = summary[:180] + "…"
+
+    return summary
+
+
+def import_uminomori_events(con):
+    seed_pages = [
+        UMINOMORI_TOP_URL,
+        UMINOMORI_EVENT_INDEX_URL,
+        UMINOMORI_EVENT_SORTTIME_URL,
+        UMINOMORI_NEWS_INDEX_URL,
+    ]
+
+    links = set()
+
+    for seed in seed_pages:
+        try:
+            html_text = download_html(seed)
+            found = _extract_uminomori_candidate_links(html_text)
+            print("[uminomori] seed:", seed, "found:", len(found))
+            links.update(found)
+        except Exception as e:
+            print("[uminomori] seed skip:", seed, "err=", repr(e))
+
+    links = sorted(links)
+    print("Found uminomori candidate links:", len(links))
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("uminomori",))
+
+    count = 0
+
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            text_raw = _strip_tags(detail_html)
+            text = _normalize_zenkaku(text_raw)
+
+            # タイトル
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = _clean_uminomori_title((m.group(1) if m else "").strip())
+
+            # fallback: h1
+            if not title:
+                mh1 = re.search(r"<h1[^>]*>(.*?)</h1>", detail_html, flags=re.I | re.S)
+                if mh1:
+                    title = _clean_uminomori_title(_strip_tags(mh1.group(1)))
+
+            if not title:
+                continue
+
+            # タイトルで明らかにイベントでないものを除外
+            if any(x in title for x in [
+                "公式アプリ",
+                "年間パスポート",
+                "Webチケット",
+                "団体予約",
+                "ご予約",
+                "お知らせ",
+                "営業時間",
+                "アクセス",
+                "料金案内",
+            ]):
+                print("[uminomori] skip non-event title:", title)
+                continue
+
+            combined_head = f"{title} {text[:300]}"
+
+            # 終了済みは除外
+            if "終了しました" in combined_head or "終了いたしました" in combined_head:
+                print("[uminomori] skip ended:", title)
+                continue
+
+            # 日付抽出
+            ymds = _extract_uminomori_dates(text)
+
+            # 明確な日付が取れないページは基本スキップ
+            # （毎日開催の常設プログラムを大量に入れないため）
+            if not ymds:
+                print("[uminomori] no date:", url)
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            # ニュース詳細は「イベント」らしさが弱いものを除外
+            if "/umino/news/" in url:
+                if not any(x in combined_head for x in [
+                    "イベント", "開催", "募集", "参加", "体験", "小学生", "親子", "こども", "子ども"
+                ]):
+                    print("[uminomori] skip non-event news:", title)
+                    continue
+
+            # 特設ページはイベントっぽい語が無ければ除外
+            # if "/umino/news/" not in url and "/umino/event/" not in url:
+            #     if not any(x in combined_head for x in [
+            #         "イベント", "開催", "期間限定", "体験", "ワークショップ",
+            #         "親子", "子ども", "こども", "小学生"
+            #     ]):
+            #         print("[uminomori] skip weak special page:", title)
+            #         continue
+
+            summary = _make_uminomori_summary(title, text)
+            if not summary:
+                summary = "仙台うみの杜水族館で開催されるイベントです。詳細は公式ページをご確認ください。"
+
+            tags = {}
+            kid_score = 60
+            combined = f"{title} {summary}"
+
+            if any(x in combined for x in [
+                "子ども", "こども", "親子", "小学生", "幼児",
+                "体験", "工作", "ワークショップ", "探偵",
+                "ペンギン", "イルカ", "アシカ", "水族館"
+            ]):
+                tags["kids"] = True
+                kid_score = 85
+
+            if "無料" in combined:
+                tags["free"] = True
+
+            # venue
+            venue = "仙台うみの杜水族館"
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "uminomori",
+                    url,
+                    title,
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "仙台市宮城野区",
+                    venue,
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[uminomori] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported uminomori events: {count}")
+
+# ===== せんだいメディアテーク =====
+
+SENDAI_MEDIATHEQUE_SP_URL = "https://www.smt.jp/sp/"
+SENDAI_MEDIATHEQUE_BASE = "https://www.smt.jp"
+
+
+def _clean_smt_title(title: str) -> str:
+    if not title:
+        return ""
+
+    title = re.sub(r"\s+", " ", title).strip()
+
+    for noise in [
+        "｜ せんだいメディアテーク",
+        "| せんだいメディアテーク",
+        "｜せんだいメディアテーク",
+        "|せんだいメディアテーク",
+        " - せんだいメディアテーク",
+    ]:
+        title = title.replace(noise, "").strip()
+
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def _extract_smt_candidate_links(html_text: str):
+    """
+    せんだいメディアテークの /sp/ から
+    /projects/...html と /news/...html を拾う
+    相対URL・絶対URLの両方に対応
+    """
+    links = set()
+
+    patterns = [
+        r'href=["\'](https?://www\.smt\.jp/projects/[^"\']+\.html)["\']',
+        r'href=["\'](https?://www\.smt\.jp/news/[^"\']+\.html)["\']',
+        r'href=["\'](/projects/[^"\']+\.html)["\']',
+        r'href=["\'](/news/[^"\']+\.html)["\']',
+    ]
+
+    for pat in patterns:
+        for p in re.findall(pat, html_text, flags=re.I):
+            full = p
+            if p.startswith("/"):
+                full = SENDAI_MEDIATHEQUE_BASE + p
+
+            # 除外
+            if any(x in full for x in [
+                "/archive/",
+                "/barrierfree/",
+                "/use/usecase/",
+                "/news/index.html",
+            ]):
+                continue
+
+            links.add(full)
+
+    return sorted(links)
+
+def _extract_smt_dates(text: str):
+    """
+    メディアテーク向け日付抽出
+    対応:
+    - 2026年4月25日
+    - 2026/04/25
+    - 令和8年4月25日
+    - 2025年10月1日（水）〜2026年1月14日（水）
+    """
+    ymds = []
+    ymds += _japanese_dates_to_ymd_list(text)
+    ymds += _slash_dates_to_ymd_list(text)
+
+    try:
+        ymds += _museum_dates_to_ymd_list(text)
+    except Exception:
+        pass
+
+    return sorted(set(ymds))
+
+
+def _make_smt_summary(title: str, text: str):
+    summary = re.sub(r"\s+", " ", text).strip()
+
+    if title and summary.startswith(title):
+        summary = summary[len(title):].strip()
+
+    for noise in [
+        "せんだいメディアテーク",
+        "イベントカレンダー",
+        "メディアテークについて知る",
+        "フロアガイド",
+        "施設をかりる",
+        "ライブラリーをつかう",
+        "活動中のプロジェクト",
+        "アクセス",
+        "よくある質問",
+        "お問い合わせ",
+        "PAGE UP",
+        "copyright (c) 2023 sendai mediatheque.",
+        "copyright (c) 2026 sendai mediatheque.",
+        "all rights reserved.",
+    ]:
+        summary = summary.replace(noise, " ")
+
+    summary = re.sub(r"\s+", " ", summary).strip()
+
+    if len(summary) > 180:
+        summary = summary[:180] + "…"
+
+    return summary
+
+
+def import_sendai_mediatheque_events(con):
+    html_top = download_html(SENDAI_MEDIATHEQUE_SP_URL)
+    links = _extract_smt_candidate_links(html_top)
+
+    print("Found sendai_mediatheque links:", len(links))
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("sendai_mediatheque",))
+
+    count = 0
+
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            text = _strip_tags(detail_html)
+
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = _clean_smt_title((m.group(1) if m else "").strip())
+
+            if not title:
+                mh1 = re.search(r"<h1[^>]*>(.*?)</h1>", detail_html, flags=re.I | re.S)
+                if mh1:
+                    title = _clean_smt_title(_strip_tags(mh1.group(1)))
+
+            if not title:
+                continue
+
+            # 明らかな非イベントを除外
+            if any(x in title for x in [
+                "オリジナルグッズ",
+                "休館日",
+                "ネットワークを停止",
+                "過去のお知らせ",
+                "デザイントートバッグ",
+                "チューブクッキー",
+            ]):
+                print("[sendai_mediatheque] skip non-event:", title)
+                continue
+
+            ymds = _extract_smt_dates(text)
+            if not ymds:
+                print("[sendai_mediatheque] no date:", url)
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            summary = _make_smt_summary(title, text)
+            if not summary:
+                summary = "せんだいメディアテークで開催されるイベントです。詳細は公式ページをご確認ください。"
+
+            tags = {}
+            kid_score = 55
+            combined = title + " " + summary
+
+            if any(x in combined for x in [
+                "子ども", "こども", "親子", "小学生",
+                "ワークショップ", "工作", "体験",
+                "見本市", "観察", "ツアー", "おはなし"
+            ]):
+                tags["kids"] = True
+                kid_score = 80
+
+            if "無料" in combined or "入場無料" in combined or "参加無料" in combined:
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "sendai_mediatheque",
+                    url,
+                    title,
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "仙台市青葉区",
+                    "せんだいメディアテーク",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[sendai_mediatheque] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported sendai_mediatheque events: {count}")
+
+# ===== JRフルーツパーク仙台あらはま =====
+
+FRUITPARK_ARAHAMA_NEWS_URL = "https://stbl-fruit-farm.jp/arahama/news/"
+FRUITPARK_ARAHAMA_GUIDE_URL = "https://stbl-fruit-farm.jp/arahama/category/information/guide/"
+FRUITPARK_ARAHAMA_BASE = "https://stbl-fruit-farm.jp"
+
+
+def _clean_fruitpark_title(title: str) -> str:
+    if not title:
+        return ""
+
+    title = re.sub(r"\s+", " ", title).strip()
+
+    for noise in [
+        " | 〖公式〗入園無料!!「JRフルーツパーク仙台あらはま」いつでも収穫体験♪",
+        "｜〖公式〗入園無料!!「JRフルーツパーク仙台あらはま」いつでも収穫体験♪",
+        " | JRフルーツパーク仙台あらはま",
+        "｜JRフルーツパーク仙台あらはま",
+    ]:
+        title = title.replace(noise, "").strip()
+
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def _extract_fruitpark_candidate_links(html_text: str):
+    links = set()
+
+    patterns = [
+        r'href=["\'](https?://stbl-fruit-farm\.jp/arahama/20\d{2}/\d{1,2}/[^"\']*)["\']',
+        r'href=["\'](/arahama/20\d{2}/\d{1,2}/[^"\']*)["\']',
+    ]
+
+    for pat in patterns:
+        for p in re.findall(pat, html_text, flags=re.I):
+            full = p if p.startswith("http") else (FRUITPARK_ARAHAMA_BASE + p)
+
+            # 月別アーカイブやページ送りっぽいものを除外
+            if any(x in full for x in [
+                "/page/",
+                "/feed/",
+                "/category/",
+                "/tag/",
+            ]):
+                continue
+
+            # 画像などを除外
+            if re.search(r'\.(jpg|jpeg|png|gif|webp|pdf)$', full, flags=re.I):
+                continue
+
+            links.add(full)
+
+    return sorted(set(links))
+
+
+def _extract_fruitpark_dates(text: str):
+    norm = _normalize_zenkaku(text)
+
+    ymds = []
+    ymds += _japanese_dates_to_ymd_list(norm)
+    ymds += _slash_dates_to_ymd_list(norm)
+
+    try:
+        ymds += _museum_dates_to_ymd_list(norm)
+    except Exception:
+        pass
+
+    if ymds:
+        return sorted(set(ymds))
+
+    # 年なし月日対応
+    md_pairs = re.findall(r'(\d{1,2})月\s*(\d{1,2})日', norm)
+    if not md_pairs:
+        return []
+
+    current_year = dt.date.today().year
+    parsed = [(int(m), int(d)) for m, d in md_pairs]
+
+    if len(parsed) == 1:
+        mm, dd = parsed[0]
+        return [f"{current_year:04d}-{mm:02d}-{dd:02d}"]
+
+    months = [mm for mm, dd in parsed]
+    min_m = min(months)
+    max_m = max(months)
+
+    results = []
+    if max_m - min_m >= 6:
+        for mm, dd in parsed:
+            year = current_year - 1 if mm >= 10 else current_year
+            results.append(f"{year:04d}-{mm:02d}-{dd:02d}")
+    else:
+        for mm, dd in parsed:
+            results.append(f"{current_year:04d}-{mm:02d}-{dd:02d}")
+
+    return sorted(set(results))
+
+
+def _make_fruitpark_summary(title: str, text: str):
+    norm = _normalize_zenkaku(text)
+    summary = re.sub(r"\s+", " ", norm).strip()
+
+    if title and summary.startswith(title):
+        summary = summary[len(title):].strip()
+
+    for noise in [
+        "JRフルーツパーク仙台あらはま",
+        "お問い合わせはこちら",
+        "営業時間",
+        "休園日",
+        "運営会社",
+        "フルーツ狩り イベント予約",
+        "施設について",
+        "アクセス",
+        "よくある ご質問",
+        "Facebook",
+        "Instagram",
+        "translate",
+        "Language",
+    ]:
+        summary = summary.replace(noise, " ")
+
+    summary = re.sub(r"\s+", " ", summary).strip()
+
+    if len(summary) > 180:
+        summary = summary[:180] + "…"
+
+    return summary
+
+
+def import_fruitpark_arahama_events(con):
+    seed_pages = [
+        FRUITPARK_ARAHAMA_NEWS_URL,
+        FRUITPARK_ARAHAMA_GUIDE_URL,
+    ]
+
+    links = set()
+
+    for seed in seed_pages:
+        try:
+            html_text = download_html(seed)
+            found = _extract_fruitpark_candidate_links(html_text)
+            print("[fruitpark] seed:", seed, "found:", len(found))
+            links.update(found)
+        except Exception as e:
+            print("[fruitpark] seed skip:", seed, "err=", repr(e))
+
+    links = sorted(set(links))
+    print("Found fruitpark_arahama links:", len(links))
+
+    cur = con.cursor()
+    cur.execute("DELETE FROM events WHERE source=?", ("fruitpark_arahama",))
+
+    count = 0
+
+    for url in links:
+        try:
+            detail_html = download_html(url)
+            text = _strip_tags(detail_html)
+
+            m = re.search(r"<title>(.*?)</title>", detail_html, flags=re.I | re.S)
+            title = _clean_fruitpark_title((m.group(1) if m else "").strip())
+
+            if not title:
+                mh1 = re.search(r"<h1[^>]*>(.*?)</h1>", detail_html, flags=re.I | re.S)
+                if mh1:
+                    title = _clean_fruitpark_title(_strip_tags(mh1.group(1)))
+
+            if not title:
+                continue
+
+            # つまらない/案内系は除外
+            if any(x in title for x in [
+                "年末年始の営業",
+                "休園",
+                "営業時間",
+                "お問い合わせ",
+                "アクセス",
+                "焼きりんご体験について",   # 中止案内
+            ]):
+                print("[fruitpark] skip non-event:", title)
+                continue
+
+            combined = f"{title} {text[:300]}"
+
+            # イベントっぽさが弱いものは除外
+            if not any(x in combined for x in [
+                "イベント", "体験", "収穫", "ワークショップ",
+                "親子", "いちご", "パフェ", "クレープ",
+                "抽選会", "スタンプラリー", "あそび場", "MARKET"
+            ]):
+                print("[fruitpark] skip weak:", title)
+                continue
+
+            ymds = _extract_fruitpark_dates(text)
+            if not ymds:
+                print("[fruitpark] no date:", url)
+                continue
+
+            start_day = min(ymds)
+            end_day = max(ymds)
+
+            summary = _make_fruitpark_summary(title, text)
+            if not summary:
+                summary = "JRフルーツパーク仙台あらはまで開催されるイベントです。詳細は公式ページをご確認ください。"
+
+            tags = {}
+            kid_score = 70
+
+            if any(x in combined for x in [
+                "親子", "子ども", "こども", "小学生",
+                "体験", "収穫", "ワークショップ",
+                "いちご", "パフェ", "クレープ", "あそび場"
+            ]):
+                tags["kids"] = True
+                kid_score = 85
+
+            if "無料" in combined or "参加費用無料" in combined or "入場無料" in combined:
+                tags["free"] = True
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO events
+                (source, source_id, title, summary, url, start_at, end_at, area, venue_name, price_band, tags_json, kid_score)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "fruitpark_arahama",
+                    url,
+                    title,
+                    summary,
+                    url,
+                    start_day,
+                    end_day,
+                    "仙台市若林区",
+                    "JRフルーツパーク仙台あらはま",
+                    "free" if tags.get("free") else "unknown",
+                    json.dumps(tags, ensure_ascii=False),
+                    kid_score,
+                )
+            )
+            count += 1
+
+        except Exception as e:
+            print("[fruitpark] skip:", url, "err=", repr(e))
+
+    con.commit()
+    print(f"Imported fruitpark_arahama events: {count}")
 
 # ===== 仙台泉プレミアムアウトレット =====
 
@@ -1434,6 +2244,38 @@ def _is_weekend(start_at: str) -> bool:
     except:
         return False
 
+DISPLAY_NG_WORDS = [
+    "図書館", "おはなし", "読み聞かせ", "講座", "説明会",
+    "休館", "営業", "案内", "募集", "上映会",
+    "会議", "研修", "資料紹介", "展示解説",
+
+    # 販促・会員向け・買い物系
+    "優待", "クーポン", "会員", "会員さま", "カード", "ガイド",
+    "セール", "キャンペーン", "請求時", "5%OFF", "入会",
+    "ノベルティ", "お買物券", "買い物券", "特典", "プレゼント",
+    "ショッピングパークカード", "カーシェアーズ",
+    "学割", "学生限定", "アンケート", "ご回答", "抽選",
+    "ポイント", "当たる", "プレゼント", "進呈",
+    "応募", "エントリー", "会員登録", "入会",
+    "キャンペーン", "セール", "特典", "優待",
+    "クーポン", "お買物券", "買い物券",
+]
+
+DISPLAY_GOOD_WORDS = [
+    "体験", "ワークショップ", "実験", "工作", "クラフト",
+    "ものづくり", "親子", "子ども", "こども", "キッズ",
+    "科学", "宇宙", "水族館", "動物", "ショー",
+    "撮影会", "フェア", "まつり", "祭り", "縁日",
+]
+
+DISPLAY_SOURCE_BONUS = {
+    "uminomori": 2,
+    "kagakukan": 2,
+    "sendai_astro": 2,
+    "tohoku_science": 1,
+    "sendai_museum": 1,
+}
+
 def build_site(con):
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     (SITE_DIR / "style.css").write_text(CSS, encoding="utf-8")
@@ -1442,13 +2284,13 @@ def build_site(con):
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # 列取得
-    sql = "SELECT title, summary, start_at, end_at, venue_name, tags_json, kid_score, url FROM events"
+    sql = "SELECT title, summary, start_at, end_at, venue_name, tags_json, kid_score, url, source FROM events"
     rows = con.execute(sql).fetchall()
 
     future, past = [], []
 
     # item = (t, s, start_day, end_day, venue, tags_json, kid_score, url)
-    for t, s, start_at, end_at, venue, tags_json, kid_score, url in rows:
+    for t, s, start_at, end_at, venue, tags_json, kid_score, url, source in rows:
         start_day = (start_at or "")[:10]
         if start_day.count("-") != 2:
             continue
@@ -1461,6 +2303,56 @@ def build_site(con):
         if kid_score is None:
             kid_score = 0
 
+        t = t or ""
+        s = s or ""
+        venue = venue or ""
+        source = source or ""
+
+        combined_text = f"{t} {s} {venue}"
+
+        # 表示前ノイズ除去
+        matched_ng = [word for word in DISPLAY_NG_WORDS if word in combined_text]
+        if matched_ng:
+            print("SKIP:", matched_ng, t)
+            continue
+
+        # 楽しいイベントを少し上げる
+        bonus = 0
+        for word in DISPLAY_GOOD_WORDS:
+            if word in combined_text:
+                bonus += 1
+
+        bonus += DISPLAY_SOURCE_BONUS.get(source, 0)
+
+        kid_score += bonus
+
+        # ===== 長期イベントは少し下げる =====
+        try:
+            d1 = datetime.strptime(start_day, "%Y-%m-%d")
+            d2 = datetime.strptime(end_day, "%Y-%m-%d")
+            duration = (d2 - d1).days
+
+            if duration > 30:
+                kid_score -= 2
+            elif duration > 7:
+                kid_score -= 1
+
+        except Exception:
+            pass
+
+        # 開催が近いイベントを少し上げる
+        try:
+            d1 = datetime.strptime(start_day, "%Y-%m-%d").date()
+            diff = (d1 - date.today()).days
+
+            if diff <= 3:
+                kid_score += 2
+            elif diff <= 7:
+                kid_score += 1
+
+        except Exception:
+            pass
+
         item = (t, s, start_day, end_day, venue, tags_json, kid_score, url)
 
         # ★ 開催中も未来扱い（終了日が今日以降）
@@ -1469,7 +2361,30 @@ def build_site(con):
         else:
             past.append(item)
 
+    # 近い日付を優先しつつ、同日なら kid_score が高いものを上にする
+    future.sort(key=lambda item: (item[2], -item[6], item[0] or ""))
+    past.sort(key=lambda item: (item[2], -item[6], item[0] or ""))
+
     show = future[:200] if future else past[-200:]
+
+    # ===== 今週末イベント抽出 =====
+    weekend_items = []
+
+    for item in show:
+        start_day = item[2]
+
+        try:
+            d = datetime.strptime(start_day, "%Y-%m-%d").date()
+            if d.weekday() in (5, 6):  # 土日
+                weekend_items.append(item)
+        except:
+            pass
+
+    # ===== おすすめ3件 =====
+    top_items = sorted(
+        weekend_items if weekend_items else show,
+        key=lambda item: (-item[6], item[2])
+    )[:3]
 
     # ===== 今週末の土日を計算 =====
     today_date = dt.date.today()
@@ -1524,6 +2439,18 @@ def build_site(con):
             return f"{ymd}（{w}）"
         except Exception:
             return ymd
+
+    # ===== おすすめ表示 =====
+    body += "<h2>✨ ピックアップ</h2>"
+
+    for t, s, start_day, end_day, venue, tags_json, kid_score, url in top_items:
+        body += f"""
+        <div class="card">
+          <h3><a href="{url}" target="_blank">{escape(t)}</a></h3>
+          <div class="meta">{start_day} ～ {end_day} / {escape(venue)}</div>
+          <p>{escape(s)}</p>
+        </div>
+        """
 
     body += "<h2>これからのイベント</h2>" if future else "<h2>直近のイベント（過去）</h2>"
 
@@ -1777,6 +2704,10 @@ def build_site(con):
 
 def main():
     con = connect_db()
+
+    con.execute("DELETE FROM events")
+    con.commit()
+
     import_sendai_events(con)
     import_kagakukan_events(con)
     import_tohoku_science_events(con)
@@ -1786,6 +2717,9 @@ def main():
     import_aeonmall_kamisugi_events(con)
     # import_aeonmall_natori_events(con)   # ←一旦保留でもOK
     import_mitsui_outlet_sendai_events(con)
+    import_uminomori_events(con)
+    import_sendai_mediatheque_events(con)
+    # import_fruitpark_arahama_events(con)
     # import_sendai_izumi_outlet_events(con)   # ←ここを一旦止める
     build_site(con)
     con.close()
