@@ -1454,7 +1454,11 @@ def build_site(con):
 
         detail_body = f"""
     <h1>{escape(t)}</h1>
-    <p>{escape(start_day)}〜{escape(end_day)}</p>
+    start_disp = start_day[:10] if start_day else ""
+    end_disp = end_day[:10] if end_day else ""
+
+    <p>{escape(start_disp)}〜{escape(end_disp)}</p>
+
     <p>{escape(venue or "")}</p>
     <p>{escape(s or "")}</p>
     <p><a href="{escape(url)}" target="_blank">公式サイト</a></p>
