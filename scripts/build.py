@@ -1445,39 +1445,6 @@ def build_site(con):
     sql = "SELECT title, summary, start_at, end_at, venue_name, tags_json, kid_score, url FROM events"
     rows = con.execute(sql).fetchall()
 
-    # ==============================
-    # ★ 個別イベントページ生成
-    # ==============================
-    for t, s, start_day, end_day, venue, tags_json, kid_score, url in rows:
-
-        slug = re.sub(r'[^a-zA-Z0-9]', '-', t)[:50]
-
-        detail_body = f"""
-    <h1>{escape(t)}</h1>
-    start_disp = start_day[:10] if start_day else ""
-    end_disp = end_day[:10] if end_day else ""
-
-    <p>{escape(start_disp)}〜{escape(end_disp)}</p>
-
-    <p>{escape(venue or "")}</p>
-    <p>{escape(s or "")}</p>
-    <p><a href="{escape(url)}" target="_blank">公式サイト</a></p>
-    <p><a href="../index.html">←一覧に戻る</a></p>
-    """
-
-        detail_path = SITE_DIR / "events" / f"{slug}.html"
-        detail_path.parent.mkdir(parents=True, exist_ok=True)
-
-        detail_path.write_text(
-            html(
-                f"{t}｜仙台の子どもイベント",
-                detail_body,
-                description=(s or "")[:120],
-                path=f"events/{slug}.html",
-            ),
-            encoding="utf-8"
-        )
-
     future, past = [], []
 
     # item = (t, s, start_day, end_day, venue, tags_json, kid_score, url)
@@ -1737,9 +1704,9 @@ def build_site(con):
             if len(desc) > 120:
                 desc = desc[:120] + "…"
 
-            slug = re.sub(r'[^a-zA-Z0-9]', '-', t)[:50]
-
-            title_html = f'<a href="events/{slug}.html">{escape(t)}</a>'
+            title_html = escape(t)
+            if url:
+                title_html = f'<a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{escape(t)}</a>'
 
             start_label = ymd_with_wday(start_day)
             if end_day and end_day != start_day:
