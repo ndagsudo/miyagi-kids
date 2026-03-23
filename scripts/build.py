@@ -2222,6 +2222,10 @@ def html(title: str, body: str, *, description: str = "", path: str = "index.htm
 <meta name="description" content="{escape(desc)}">
 <link rel="stylesheet" href="{asset_prefix}style.css">
 {head_ogp}
+
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1651709617297400"
+     crossorigin="anonymous"></script>
+
 </head>
 <body>
 <header class="topbar"><h1 class="logo">仙台・宮城の子どもイベント</h1></header>
