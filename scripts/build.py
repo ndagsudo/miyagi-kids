@@ -2218,6 +2218,11 @@ def html(title: str, body: str, *, description: str = "", path: str = "index.htm
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
+client="ca-pub-1651709617297400"
+crossorigin="anonymous"></script>
+
 <title>{escape(title)}</title>
 <meta name="description" content="{escape(desc)}">
 <link rel="stylesheet" href="{asset_prefix}style.css">
@@ -2244,7 +2249,7 @@ def _is_weekend(start_at: str) -> bool:
     s = start_at.strip().replace("T", " ")
     try:
         d = datetime.fromisoformat(s[:19] if len(s) >= 19 else s[:10] + " 00:00:00")
-        return d.weekday() in (5, 6)  # 土日
+        return d.weekday() in (4, 5, 6)  # 金土日
     except:
         return False
 
@@ -2286,6 +2291,8 @@ def build_site(con):
 
     today = dt.date.today().isoformat()
     updated = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now()
+    year_month = f"{now.year}年{now.month}月"
 
     # 列取得
     sql = "SELECT title, summary, start_at, end_at, venue_name, tags_json, kid_score, url, source FROM events"
@@ -2311,6 +2318,9 @@ def build_site(con):
         s = s or ""
         venue = venue or ""
         source = source or ""
+
+        if any(x in s for x in ["function(", "var ", "gtm.", "navigator.", "window.", "document."]):
+            continue
 
         combined_text = f"{t} {s} {venue}"
 
@@ -2379,7 +2389,7 @@ def build_site(con):
 
         try:
             d = datetime.strptime(start_day, "%Y-%m-%d").date()
-            if d.weekday() in (5, 6):  # 土日
+            if d.weekday() in (4, 5, 6):  # 金土日
                 weekend_items.append(item)
         except:
             pass
@@ -2419,7 +2429,7 @@ def build_site(con):
 
     body = f"<p class='meta'>更新: {updated}</p>"
     body += "<p>仙台・宮城で開催される子ども向けイベントをまとめています。親子で楽しめる今週末のお出かけ、図書館イベント、科学館イベント、無料イベントを探せます。</p>"
-    body += '<p><a href="weekend.html">▶ 今週末まとめページを見る</a></p>'
+    body += '<p><a href="weekend.html">▶ 今週末の子どもイベント一覧を見る（仙台・宮城）</a></p>'
     body += '<p><a href="privacy.html">プライバシーポリシー</a></p>'
 
     # --- 検索バー + ボタン ---
@@ -2587,9 +2597,9 @@ def build_site(con):
 
     (SITE_DIR / "index.html").write_text(
         html(
-            "仙台の子どもイベントまとめ｜今週末・親子で楽しめるお出かけ情報",
+            f"【{year_month}】仙台 子ども イベント｜今週末のお出かけまとめ",
             body,
-            description="仙台・宮城の子ども向けイベントをまとめたサイトです。今週末の親子イベント、図書館、科学館、体験イベント、無料イベントを検索できます。",
+            description="仙台・宮城で開催される子ども向けイベントをまとめたサイトです。今週末のお出かけ、無料イベント、体験イベント、科学館、水族館など親子で楽しめる情報を掲載しています。",
             path="index.html",
         ),
         encoding="utf-8"
@@ -2610,7 +2620,10 @@ def build_site(con):
     (SITE_DIR / "sitemap.xml").write_text(sitemap, encoding="utf-8")
 
     # ===== 今週末ページ生成（おすすめ3選つき） =====
-    weekend_title = f"今週末（{sat_str}〜{sun_str}）のイベント"
+    weekend_title = f"今週末（{sat_str}〜{sun_str}）の子どもイベント（仙台・宮城）"
+
+    now = datetime.now()
+    year_month = f"{now.year}年{now.month}月"
 
     # おすすめ上位3件（kid_score降順、同点はタイトルで安定化）
     weekend_sorted = sorted(
@@ -2623,7 +2636,7 @@ def build_site(con):
     weekend_body = f"""
 <h1>{escape(weekend_title)}</h1>
 <p class="meta">更新: {escape(updated)} / 件数: {len(weekend_items)}件（無料: {weekend_free_count}件）</p>
-<p>仙台市周辺の子ども向けイベントを、今週末に重なるものだけまとめました。気になるものはタイトルから公式ページへ。</p>
+<p>仙台・宮城で今週末に開催される子ども向けイベントをまとめました。親子で楽しめるお出かけ先を探せます。気になるものはタイトルから公式ページへ。</p>
 <hr>
 """
 
@@ -2698,9 +2711,9 @@ def build_site(con):
 
     (SITE_DIR / "weekend.html").write_text(
         html(
-            "今週末の仙台 子どもイベント｜親子で行けるおすすめお出かけ情報",
+            f"【{year_month}】仙台 子ども イベント｜今週末のお出かけまとめ",
             weekend_body,
-            description=f"今週末（{sat_str}〜{sun_str}）に仙台・宮城で開催される子ども向けイベントをまとめました。親子で楽しめる体験イベント、図書館、科学館、無料イベントを掲載。",
+            description=f"今週末（{sat_str}〜{sun_str}）に仙台・宮城で開催される子ども向けイベントをまとめました。親子で楽しめる体験イベント、無料イベント、科学館、水族館などのお出かけ先を掲載しています。",
             path="weekend.html",
             og_image="ogp-g4.png",
         ),
