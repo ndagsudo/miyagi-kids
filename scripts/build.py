@@ -2215,28 +2215,20 @@ def html(title: str, body: str, *, description: str = "", path: str = "index.htm
 
     return f"""<!doctype html>
 <html lang="ja">
+
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
-client="ca-pub-1651709617297400"
-crossorigin="anonymous"></script>
-
 <title>{escape(title)}</title>
 <meta name="description" content="{escape(desc)}">
 <link rel="stylesheet" href="{asset_prefix}style.css">
 
-<!-- ★ここに追加（AdSense） -->
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
-     crossorigin="anonymous"></script>
-
-{head_ogp}
-
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1651709617297400"
      crossorigin="anonymous"></script>
 
+{head_ogp}
 </head>
+
 <body>
 <header class="topbar"><h1 class="logo">仙台・宮城の子どもイベント</h1></header>
 <main class="container">
