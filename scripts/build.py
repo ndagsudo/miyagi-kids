@@ -2226,6 +2226,11 @@ crossorigin="anonymous"></script>
 <title>{escape(title)}</title>
 <meta name="description" content="{escape(desc)}">
 <link rel="stylesheet" href="{asset_prefix}style.css">
+
+<!-- ★ここに追加（AdSense） -->
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
+     crossorigin="anonymous"></script>
+
 {head_ogp}
 
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1651709617297400"
@@ -2319,10 +2324,51 @@ def build_site(con):
         venue = venue or ""
         source = source or ""
 
+        # ===== タイトルを少し分かりやすくする =====
+        if "体験" in t and "小学生" not in t and "親子" not in t:
+            t = "小学生向け " + t
+
+        if "科学館" in venue and "科学館" not in t:
+            t = t + "｜仙台市科学館"
+
+        if "うみの杜" in venue and "水族館" not in t:
+            t = t + "｜うみの杜水族館"
+
+        if "天文台" in venue and "天文台" not in t:
+            t = t + "｜仙台市天文台"
+
         if any(x in s for x in ["function(", "var ", "gtm.", "navigator.", "window.", "document."]):
             continue
 
         combined_text = f"{t} {s} {venue}"
+
+        # ===== 微妙イベントを下げる =====
+        if any(x in combined_text for x in [
+            "展示", "企画展", "歴史", "文化", "資料館"
+        ]):
+            kid_score -= 10
+
+        if any(x in combined_text for x in [
+            "89ERS", "スポーツ観戦", "試合"
+        ]):
+            kid_score -= 15
+
+        # ===== 子ども向けっぽいものを少し上げる（除外しない） =====
+        extra_score = 0
+
+        if any(x in combined_text for x in ["子ども", "親子", "小学生", "キッズ"]):
+            extra_score += 3
+
+        if any(x in combined_text for x in ["体験", "工作", "ワークショップ"]):
+            extra_score += 2
+
+        if any(x in combined_text for x in ["科学", "実験", "天文", "水族館", "宇宙"]):
+            extra_score += 1
+
+        if "無料" in combined_text:
+            extra_score += 1
+
+        kid_score += extra_score
 
         # 表示前ノイズ除去
         matched_ng = [word for word in DISPLAY_NG_WORDS if word in combined_text]
@@ -2394,9 +2440,24 @@ def build_site(con):
         except:
             pass
 
-    # ===== おすすめ3件 =====
+    # ===== ピックアップ用に少し厳しく候補を選ぶ =====
+    pickup_candidates = []
+
+    for item in (weekend_items if weekend_items else show):
+        t = item[0] or ""
+        s = item[1] or ""
+        text = f"{t} {s}"
+
+        if any(x in text for x in [
+            "子ども", "こども", "親子", "小学生", "キッズ",
+            "体験", "工作", "ワークショップ",
+            "科学", "実験", "水族館", "天文", "宇宙",
+            "ショー", "まつり", "祭り", "芸能", "踊り"
+        ]):
+            pickup_candidates.append(item)
+
     top_items = sorted(
-        weekend_items if weekend_items else show,
+        pickup_candidates if pickup_candidates else (weekend_items if weekend_items else show),
         key=lambda item: (-item[6], item[2])
     )[:3]
 
