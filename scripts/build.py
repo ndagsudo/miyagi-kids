@@ -2244,7 +2244,11 @@ gtag('config', 'G-P37DBYHZDQ');
 <main class="container">
 {body}
 </main>
-<footer class="footer">© miyagi-kids</footer>
+<footer class="footer">
+  <a href="{asset_prefix}privacy.html">プライバシーポリシー</a>
+  <span> | </span>
+  <span>© miyagi-kids</span>
+</footer>
 </body>
 </html>
 """
